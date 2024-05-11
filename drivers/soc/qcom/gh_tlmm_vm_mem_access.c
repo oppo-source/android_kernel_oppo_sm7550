@@ -257,8 +257,11 @@ static int gh_tlmm_vm_populate_vm_info(struct platform_device *dev, struct gh_tl
 		vm_info->iomem_sizes[i] = resource_size(res);
 	}
 
+	kfree(gpios);
+	kfree(res);
 	return rc;
 io_sizes_error:
+	kfree(res);
 	kfree(vm_info->iomem_sizes);
 io_bases_error:
 	kfree(vm_info->iomem_bases);
@@ -309,6 +312,7 @@ static int gh_tlmm_vm_mem_access_probe(struct platform_device *pdev)
 	void __maybe_unused *mem_cookie;
 	int owner_vmid, ret;
 	struct device_node *node;
+	gh_vmid_t vmid;
 
 	gh_tlmm_dev = &pdev->dev;
 
@@ -345,6 +349,11 @@ static int gh_tlmm_vm_mem_access_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
+		ret = gh_rm_get_vmid(GH_TRUSTED_VM, &vmid);
+		if (ret)
+			return ret;
+
+
 		gh_tlmm_vm_mem_release(&gh_tlmm_vm_info_data);
 	}
 

@@ -192,7 +192,7 @@ static inline void writeq_ch(struct dw_edma *dw, enum dw_edma_dir dir, u16 ch,
 static inline u64 readq_ch(struct dw_edma *dw, enum dw_edma_dir dir, u16 ch,
 			   const void __iomem *addr)
 {
-	u32 value;
+	u64 value;
 
 	if (dw->mf == EDMA_MF_EDMA_LEGACY) {
 		u32 viewport_sel;
@@ -415,8 +415,11 @@ void dw_edma_v0_core_start(struct dw_edma_chunk *chunk, bool first)
 			  (DW_EDMA_V0_CCS | DW_EDMA_V0_LLE));
 		/* Linked list */
 		#ifdef CONFIG_64BIT
-			SET_CH_64(dw, chan->dir, chan->id, llp.reg,
-				  chunk->ll_region.paddr);
+			/* llp is not aligned on 64bit -> keep 32bit accesses */
+			SET_CH_32(dw, chan->dir, chan->id, llp.lsb,
+				  lower_32_bits(chunk->ll_region.paddr));
+			SET_CH_32(dw, chan->dir, chan->id, llp.msb,
+				  upper_32_bits(chunk->ll_region.paddr));
 		#else /* CONFIG_64BIT */
 			SET_CH_32(dw, chan->dir, chan->id, llp.lsb,
 				  lower_32_bits(chunk->ll_region.paddr));

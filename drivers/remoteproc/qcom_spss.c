@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2020-2021, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * Qualcomm Technologies, Inc. SPSS Peripheral Image Loader
  *
  */
@@ -35,11 +36,17 @@
 
 #define to_glink_subdev(d) container_of(d, struct qcom_rproc_glink, subdev)
 
+#define SP_SCSR_MB0_SP2CL_GP0_ADDR 0x1886020
+#define SP_SCSR_MB1_SP2CL_GP0_ADDR 0x1888020
+#define SP_SCSR_MB3_SP2CL_GP0_ADDR 0x188C020
+
+#define NUM_OF_DEBUG_REGISTERS_READ 0x3
 struct spss_data {
 	const char *firmware_name;
 	int pas_id;
 	const char *ssr_name;
 	bool auto_boot;
+	const char *qmp_name;
 };
 
 struct qcom_spss {
@@ -60,6 +67,9 @@ struct qcom_spss {
 	size_t mem_size;
 	int generic_irq;
 
+	const char *qmp_name;
+	struct qmp *qmp;
+
 	struct qcom_rproc_glink glink_subdev;
 	struct qcom_rproc_ssr ssr_subdev;
 	struct qcom_sysmon *sysmon_subdev;
@@ -71,6 +81,26 @@ struct qcom_spss {
 	void __iomem *rmb_gpm;
 	u32 bits_arr[2];
 };
+
+static void read_sp2cl_debug_registers(struct qcom_spss *spss);
+
+static void read_sp2cl_debug_registers(struct qcom_spss *spss)
+{
+	uint32_t iter;
+	void __iomem *addr = NULL;
+	uint32_t debug_register_addr[NUM_OF_DEBUG_REGISTERS_READ] = {SP_SCSR_MB0_SP2CL_GP0_ADDR,
+	  SP_SCSR_MB1_SP2CL_GP0_ADDR, SP_SCSR_MB3_SP2CL_GP0_ADDR};
+	for (iter = 0; iter < NUM_OF_DEBUG_REGISTERS_READ; iter++) {
+		addr = ioremap(debug_register_addr[iter], sizeof(uint32_t)*2);
+		if (!addr) {
+			dev_err(spss->dev, "Iteration: [0x%x], addr: [0x%x]\n", iter, addr);
+			continue;
+		}
+		dev_info(spss->dev, "Iteration: [0x%x], Debug Data1: [0x%x], Debug Data2: [0x%x]\n",
+		iter, readl_relaxed(addr), readl_relaxed(((char *) addr) + sizeof(uint32_t)));
+		iounmap(addr);
+	}
+}
 
 static int glink_spss_subdev_start(struct rproc_subdev *subdev)
 {
@@ -192,6 +222,8 @@ static void clear_sw_init_done_error(struct qcom_spss *spss, int err)
 static void clear_wdog(struct qcom_spss *spss)
 {
 	dev_err(spss->dev, "wdog bite received from %s!\n", spss->rproc->name);
+	dev_err(spss->dev, "rproc recovery state: %s\n", spss->rproc->recovery_disabled ?
+		"disabled and lead to device crash" : "enabled and kick reovery process");
 	if (spss->rproc->recovery_disabled) {
 		spss->rproc->state = RPROC_CRASHED;
 		panic("Panicking, remoterpoc %s crashed\n", spss->rproc->name);
@@ -285,6 +317,8 @@ static int spss_stop(struct rproc *rproc)
 		panic("Panicking, remoteproc %s failed to shutdown.\n", rproc->name);
 
 	mask_scsr_irqs(spss);
+	if (spss->qmp)
+		qcom_rproc_toggle_load_state(spss->qmp, spss->qmp_name, false);
 
 	/* Set state as OFFLINE */
 	rproc->state = RPROC_OFFLINE;
@@ -304,11 +338,23 @@ static int spss_attach(struct rproc *rproc)
 		spss_stop(rproc);
 		return ret;
 	}
+
+	/* signal AOP about spss status.*/
+	if (spss->qmp) {
+		ret = qcom_rproc_toggle_load_state(spss->qmp, spss->qmp_name, true);
+		if (ret) {
+			dev_err(spss->dev, "Failed to signal AOP about spss status [%d]\n", ret);
+			spss_stop(rproc);
+			return ret;
+		}
+	}
+
 	/* If booted successfully then wait for init_done*/
 
 	unmask_scsr_irqs(spss);
 
 	ret = wait_for_completion_timeout(&spss->start_done, msecs_to_jiffies(SPSS_TIMEOUT));
+	read_sp2cl_debug_registers(spss);
 	if (rproc->recovery_disabled && !ret) {
 		dev_err(spss->dev, "%d ms timeout poked\n", SPSS_TIMEOUT);
 		panic("Panicking, %s attach timed out\n", rproc->name);
@@ -317,6 +363,10 @@ static int spss_attach(struct rproc *rproc)
 	}
 
 	ret = ret ? 0 : -ETIMEDOUT;
+
+	/* if attach fails, signal AOP about spss status.*/
+	if (ret && spss->qmp)
+		qcom_rproc_toggle_load_state(spss->qmp, spss->qmp_name, false);
 
 	return ret;
 }
@@ -339,6 +389,7 @@ static int spss_start(struct rproc *rproc)
 {
 	struct qcom_spss *spss = (struct qcom_spss *)rproc->priv;
 	int ret = 0;
+	int status = 0;
 
 	ret = clk_prepare_enable(spss->xo);
 	if (ret)
@@ -348,18 +399,37 @@ static int spss_start(struct rproc *rproc)
 	if (ret)
 		goto disable_xo_clk;
 
+	/* Signal AOP about spss status. */
+	if (spss->qmp) {
+		status = qcom_rproc_toggle_load_state(spss->qmp, spss->qmp_name, true);
+		if (status) {
+			dev_err(spss->dev,
+			"Failed to signal AOP about spss status [%d]\n", status);
+			goto disable_xo_clk;
+		}
+	}
+
 	ret = qcom_scm_pas_auth_and_reset(spss->pas_id);
 	if (ret)
 		panic("Panicking, auth and reset failed for remoteproc %s\n", rproc->name);
 
 	unmask_scsr_irqs(spss);
-
+	dev_err(spss->dev, "trying to read spss registers\n");
 	ret = wait_for_completion_timeout(&spss->start_done, msecs_to_jiffies(SPSS_TIMEOUT));
+	read_sp2cl_debug_registers(spss);
 	if (rproc->recovery_disabled && !ret)
 		panic("Panicking, %s start timed out\n", rproc->name);
 	else if (!ret)
 		dev_err(spss->dev, "start timed out\n");
 	ret = ret ? 0 : -ETIMEDOUT;
+
+	/* if SPSS fails to start, signal AOP about spss status. */
+	if (ret && spss->qmp) {
+		status = qcom_rproc_toggle_load_state(spss->qmp, spss->qmp_name, false);
+		if (status)
+			dev_err(spss->dev,
+			"Failed to signal AOP about spss status [%d]\n", status);
+	}
 
 	disable_regulator(&spss->cx);
 disable_xo_clk:
@@ -532,6 +602,7 @@ static int qcom_spss_probe(struct platform_device *pdev)
 	struct rproc *rproc;
 	const char *fw_name;
 	int ret;
+	bool signal_aop;
 
 	desc = of_device_get_match_data(&pdev->dev);
 	if (!desc)
@@ -554,6 +625,7 @@ static int qcom_spss_probe(struct platform_device *pdev)
 	init_completion(&spss->start_done);
 	platform_set_drvdata(pdev, spss);
 	rproc->auto_boot = desc->auto_boot;
+	spss->qmp_name = desc->qmp_name;
 	rproc->recovery_disabled = true;
 	rproc_coredump_set_elf_info(rproc, ELFCLASS32, EM_NONE);
 
@@ -582,14 +654,23 @@ static int qcom_spss_probe(struct platform_device *pdev)
 	if (ret)
 		goto deinit_wakeup_source;
 
+	signal_aop = of_property_read_bool(pdev->dev.of_node,
+			"qcom,signal-aop");
+
+	if (signal_aop) {
+		spss->qmp = qmp_get(spss->dev);
+		if (IS_ERR_OR_NULL(spss->qmp))
+			goto deinit_wakeup_source;
+	}
+
 	qcom_add_glink_spss_subdev(rproc, &spss->glink_subdev, "spss");
-	qcom_add_ssr_subdev(rproc, &spss->ssr_subdev, desc->ssr_name);
 	spss->sysmon_subdev = qcom_add_sysmon_subdev(rproc, desc->ssr_name, -EINVAL);
 	if (IS_ERR(spss->sysmon_subdev)) {
 		dev_err(spss->dev, "failed to add sysmon subdevice\n");
 		goto deinit_wakeup_source;
 	}
 
+	qcom_add_ssr_subdev(rproc, &spss->ssr_subdev, desc->ssr_name);
 	mask_scsr_irqs(spss);
 	spss->generic_irq = platform_get_irq(pdev, 0);
 	ret = devm_request_threaded_irq(&pdev->dev, spss->generic_irq, NULL, spss_generic_handler,
@@ -634,6 +715,7 @@ static const struct spss_data spss_resource_init = {
 		.pas_id = 14,
 		.ssr_name = "spss",
 		.auto_boot = false,
+		.qmp_name = "spss",
 };
 
 static const struct of_device_id spss_of_match[] = {

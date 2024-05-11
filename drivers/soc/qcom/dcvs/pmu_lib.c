@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "qcom-pmu: " fmt
@@ -34,9 +35,10 @@
 #define MAX_PMU_EVS	QCOM_PMU_MAX_EVS
 #define INVALID_ID	0xFF
 static void __iomem *pmu_base;
+static uint32_t phys_cpu[NR_CPUS];
 
 struct cpucp_pmu_ctrs {
-	u64 evctrs[MAX_CPUCP_EVT];
+	u32 evctrs[MAX_CPUCP_EVT];
 	u32 valid;
 };
 
@@ -76,6 +78,7 @@ static struct cpucp_hlos_map cpucp_map[MAX_CPUCP_EVT];
 static struct kobject pmu_kobj;
 static bool pmu_counters_enabled = true;
 static unsigned int pmu_enable_trace;
+static bool llcc_ignore_setup;
 
 /*
  * is_amu_valid: Check if AMUs are supported and if the id corresponds to the
@@ -174,6 +177,12 @@ static int set_event(struct event_data *ev, int cpu,
 		attr->config1 = 1;
 
 	if (ev->event_id == QCOM_LLCC_PMU_RD_EV) {
+		/* Ignore setting up the event if property set. This will avoid
+		 * reading of event as well since ev->pevent will be NULL.
+		 */
+		if (llcc_ignore_setup)
+			goto set_cpu;
+
 		ret = qcom_llcc_pmu_hw_type(&type);
 		if (ret < 0)
 			return ret;
@@ -262,7 +271,7 @@ static int __qcom_pmu_read(int cpu, u32 event_id, u64 *pmu_data, bool local)
 	if (!qcom_pmu_inited)
 		return -ENODEV;
 
-	if (!event_id || !pmu_data || cpu >= num_possible_cpus())
+	if (!event_id || !pmu_data || !cpumask_test_cpu(cpu, cpu_possible_mask))
 		return -EINVAL;
 
 	cpu_data = per_cpu(cpu_ev_data, cpu);
@@ -299,7 +308,7 @@ int __qcom_pmu_read_all(int cpu, struct qcom_pmu_data *data, bool local)
 	if (!qcom_pmu_inited)
 		return -ENODEV;
 
-	if (!data || cpu >= num_possible_cpus())
+	if (!data || !cpumask_test_cpu(cpu, cpu_possible_mask))
 		return -EINVAL;
 
 	cpu_data = per_cpu(cpu_ev_data, cpu);
@@ -338,7 +347,7 @@ static struct event_data *get_event(u32 event_id, int cpu)
 	if (!qcom_pmu_inited)
 		return ERR_PTR(-EPROBE_DEFER);
 
-	if (!event_id || cpu >= num_possible_cpus())
+	if (!event_id || !cpumask_test_cpu(cpu, cpu_possible_mask))
 		return ERR_PTR(-EINVAL);
 
 	cpu_data = per_cpu(cpu_ev_data, cpu);
@@ -485,7 +494,7 @@ static int configure_cpucp_map(cpumask_t mask)
 			    is_amu_valid(event->amu_id) || !event->pevent ||
 			    !cpumask_test_cpu(cpu, to_cpumask(&cpucp_map[cid].cpus)))
 				continue;
-			pmu_map[cpu][cid] = event->pevent->hw.idx;
+			pmu_map[phys_cpu[cpu]][cid] = event->pevent->hw.idx;
 		}
 	}
 
@@ -544,7 +553,7 @@ static int memlat_pm_notif(struct notifier_block *nb, unsigned long action,
 	struct cpu_data *cpu_data = per_cpu(cpu_ev_data, cpu);
 	struct event_data *ev;
 	int i, cid, aid;
-	u64 count;
+	u32 count;
 	bool pmu_valid = false;
 	bool read_ev  = true;
 	struct cpucp_pmu_ctrs *base = pmu_base + (sizeof(struct cpucp_pmu_ctrs) * cpu);
@@ -586,7 +595,7 @@ static int memlat_pm_notif(struct notifier_block *nb, unsigned long action,
 		/* Store pmu values in allocated cpucp pmu region */
 		pmu_valid = true;
 		count = cached_count_value(ev, ev->cached_count, is_amu_valid(aid));
-		writeq_relaxed(count, &base->evctrs[cid]);
+		writel_relaxed(count, &base->evctrs[cid]);
 	}
 	/* Set valid cache flag to allow cpucp to read from this memory location */
 	if (pmu_valid)
@@ -651,7 +660,7 @@ static int qcom_pmu_hotplug_going_down(unsigned int cpu)
 	int i, cid, aid;
 	unsigned long flags;
 	bool pmu_valid = false;
-	u64 count;
+	u32 count;
 	struct cpucp_pmu_ctrs *base = pmu_base + (sizeof(struct cpucp_pmu_ctrs) * cpu);
 
 	if (!qcom_pmu_inited)
@@ -673,7 +682,7 @@ static int qcom_pmu_hotplug_going_down(unsigned int cpu)
 		if (pmu_base && is_event_shared(ev)) {
 			pmu_valid = true;
 			count = cached_count_value(ev, ev->cached_count, is_amu_valid(aid));
-			writeq_relaxed(count, &base->evctrs[cid]);
+			writel_relaxed(count, &base->evctrs[cid]);
 		}
 		delete_event(ev);
 	}
@@ -704,11 +713,12 @@ static int qcom_pmu_cpu_hp_init(void) { return 0; }
 static void cache_counters(void)
 {
 	struct cpu_data *cpu_data;
-	int i, cid;
+	int i, cid, aid;
 	unsigned int cpu;
 	struct event_data *event;
 	struct cpucp_pmu_ctrs *base;
 	bool pmu_valid;
+	u32 count;
 
 	for_each_possible_cpu(cpu) {
 		cpu_data = per_cpu(cpu_ev_data, cpu);
@@ -717,14 +727,16 @@ static void cache_counters(void)
 		for (i = 0; i < cpu_data->num_evs; i++) {
 			event = &cpu_data->events[i];
 			cid = event->cid;
+			aid = event->amu_id;
 			if (!is_event_valid(event))
 				continue;
 			read_event(event, false);
 			/* Store pmu values in allocated cpucp pmu region */
 			if (pmu_base && is_event_shared(event)) {
 				pmu_valid = true;
-				writel_relaxed(event->cached_count,
-						&base->evctrs[cid]);
+				count = cached_count_value(event, event->cached_count,
+							   is_amu_valid(aid));
+				writel_relaxed(count, &base->evctrs[cid]);
 			}
 		}
 		if (pmu_valid)
@@ -824,9 +836,7 @@ static int setup_events(void)
 		pr_err("qcom pmu driver failed to initialize hotplug: %d\n", ret);
 		goto out;
 	}
-	register_trace_android_vh_cpu_idle_enter(qcom_pmu_idle_enter_notif, NULL);
-	register_trace_android_vh_cpu_idle_exit(qcom_pmu_idle_exit_notif, NULL);
-	cpu_pm_register_notifier(&memlat_event_pm_nb);
+
 	goto out;
 
 cleanup_events:
@@ -839,6 +849,11 @@ cleanup_events:
 	}
 out:
 	cpus_read_unlock();
+	if (ret != -EPROBE_DEFER && ret != cpuhp_state) {
+		register_trace_android_vh_cpu_idle_enter(qcom_pmu_idle_enter_notif, NULL);
+		register_trace_android_vh_cpu_idle_exit(qcom_pmu_idle_exit_notif, NULL);
+		cpu_pm_register_notifier(&memlat_event_pm_nb);
+	}
 	kfree(attr);
 	return ret;
 }
@@ -860,17 +875,33 @@ static void load_pmu_counters(void)
 	pr_info("Enabled all perf counters\n");
 }
 
+static void get_mpidr_cpu(void *cpu)
+{
+	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
+
+	*((uint32_t *)cpu) = MPIDR_AFFINITY_LEVEL(mpidr, 1);
+}
+
 int rimps_pmu_init(struct scmi_device *sdev)
 {
 	int ret = 0;
+	uint32_t cpu, pcpu;
 
 	if (!sdev || !sdev->handle)
 		return -EINVAL;
 
 	ops = sdev->handle->devm_protocol_get(sdev, SCMI_PMU_PROTOCOL, &ph);
-	if (!ops)
-		return -EINVAL;
+	if (IS_ERR(ops)) {
+		ret = PTR_ERR(ops);
+		ops = NULL;
+		return ret;
+	}
 
+	for_each_possible_cpu(cpu) {
+		smp_call_function_single(cpu, get_mpidr_cpu,
+							 &pcpu, true);
+		phys_cpu[cpu] = pcpu;
+	}
 	/*
 	 * If communication with cpucp doesn't succeed here the device memory
 	 * will be de-allocated. Make ops NULL to avoid further scmi calls.
@@ -894,7 +925,7 @@ static int configure_pmu_event(u32 event_id, int amu_id, int cid, int cpu)
 	struct cpu_data *cpu_data;
 	struct event_data *event;
 
-	if (!event_id || cpu >= num_possible_cpus())
+	if (!event_id || !cpumask_test_cpu(cpu, cpu_possible_mask))
 		return -EINVAL;
 
 	cpu_data = per_cpu(cpu_ev_data, cpu);
@@ -955,9 +986,11 @@ static int init_pmu_events(struct device *dev)
 			return -EINVAL;
 
 		for_each_cpu(cpu, to_cpumask(&cpus)) {
-			ret = configure_pmu_event(event_id, amu_id, cid, cpu);
-			if (ret < 0)
-				return ret;
+			if (cpumask_test_cpu(cpu, cpu_possible_mask)) {
+				ret = configure_pmu_event(event_id, amu_id, cid, cpu);
+				if (ret < 0)
+					return ret;
+			}
 		}
 
 		if (is_cid_valid(cid)) {
@@ -1080,7 +1113,7 @@ static struct kobj_type pmu_settings_ktype = {
 static int qcom_pmu_driver_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	int ret = 0, idx;
+	int ret = 0, idx, len;
 	unsigned int cpu;
 	struct cpu_data *cpu_data;
 	struct resource res;
@@ -1103,6 +1136,11 @@ static int qcom_pmu_driver_probe(struct platform_device *pdev)
 		memset_io(pmu_base, 0, resource_size(&res));
 	}
 skip_pmu:
+	if (of_find_property(dev->of_node, "qcom,ignore-llcc-setup", &len)) {
+		dev_dbg(dev, "Ignoring llcc setup\n");
+		llcc_ignore_setup = true;
+	}
+
 	for_each_possible_cpu(cpu) {
 		cpu_data = devm_kzalloc(dev, sizeof(*cpu_data), GFP_KERNEL);
 		if (!cpu_data)

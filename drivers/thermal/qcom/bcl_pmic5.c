@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022,2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -23,6 +23,14 @@
 #include <linux/nvmem-consumer.h>
 #include <linux/ipc_logging.h>
 #include "thermal_zone_internal.h"
+#ifdef OPLUS_FEATURE_CHG_BASIC
+#include <linux/power_supply.h>
+#include <linux/proc_fs.h>
+#define CREATE_TRACE_POINTS
+#include "trace.h"
+#include <linux/rtc.h>
+#include <linux/time.h>
+#endif
 
 #define BCL_DRIVER_NAME       "bcl_pmic5"
 #define BCL_MONITOR_EN        0x46
@@ -45,6 +53,13 @@
 #define BCL_VBAT_COMP_LOW     0x49
 #define BCL_VBAT_COMP_TLOW    0x4A
 #define BCL_VBAT_CONV_REQ     0x72
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+#define BCL_H0_DGL_CTL        0x55
+#define BCL_L0_DGL_CLR_CTL    0x65
+#define BCL_H1_DGL_CTL        0x56
+#define BCL_L1_DGL_CLR_CTL    0x66
+#endif
 
 #define BCL_GEN3_MAJOR_REV    4
 #define BCL_PARAM_HAS_ADC      BIT(0)
@@ -89,6 +104,8 @@ enum bcl_dev_type {
 	BCL_LVL0,
 	BCL_LVL1,
 	BCL_LVL2,
+	BCL_2S_IBAT_LVL0,
+	BCL_2S_IBAT_LVL1,
 	BCL_TYPE_MAX,
 };
 
@@ -101,6 +118,8 @@ static char bcl_int_names[BCL_TYPE_MAX][25] = {
 	"bcl-lvl0",
 	"bcl-lvl1",
 	"bcl-lvl2",
+	"bcl-2s-ibat-lvl0",
+	"bcl-2s-ibat-lvl1",
 };
 
 enum bcl_ibat_ext_range_type {
@@ -125,6 +144,7 @@ struct bcl_peripheral_data {
 	int                     last_val;
 	struct mutex            state_trans_lock;
 	bool			irq_enabled;
+	bool			irq_freed;
 	enum bcl_dev_type	type;
 	struct thermal_zone_of_device_ops ops;
 	struct thermal_zone_device *tz_dev;
@@ -141,14 +161,34 @@ struct bcl_device {
 	uint8_t				bcl_type;
 	void				*ipc_log;
 	bool				ibat_ccm_enabled;
+	bool				ibat_use_qg_adc;
+	bool				no_bit_shift;
 	uint32_t			ibat_ext_range_factor;
 	struct bcl_peripheral_data	param[BCL_TYPE_MAX];
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	bool				support_track;
+	int				id;
+#endif
 };
 
 static struct bcl_device *bcl_devices[MAX_PERPH_COUNT];
 static int bcl_device_ct;
-static bool ibat_use_qg_adc;
-static bool no_bit_shift;
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+struct timeval {
+	long tv_sec;
+	long tv_usec;
+};
+
+static void do_gettimeofday(struct timeval *tv)
+{
+	struct timespec64 now;
+
+	ktime_get_real_ts64(&now);
+	tv->tv_sec = now.tv_sec;
+	tv->tv_usec = now.tv_nsec/1000;
+}
+#endif
 
 static int bcl_read_register(struct bcl_device *bcl_perph, int16_t reg_offset,
 				unsigned int *data)
@@ -196,13 +236,13 @@ static int bcl_write_register(struct bcl_device *bcl_perph,
 	return ret;
 }
 
-static void convert_adc_to_vbat_thresh_val(int *val)
+static void convert_adc_to_vbat_thresh_val(struct bcl_device *bcl_perph, int *val)
 {
 	/*
 	 * Threshold register can be bit shifted from ADC MSB.
 	 * So the scaling factor is half in those cases.
 	 */
-	if (no_bit_shift)
+	if (bcl_perph->no_bit_shift)
 		*val = (*val * BCL_VBAT_SCALING_UV) / 1000;
 	else
 		*val = (*val * BCL_VBAT_SCALING_UV) / 2000;
@@ -213,15 +253,15 @@ static void convert_adc_to_vbat_val(int *val)
 	*val = (*val * BCL_VBAT_SCALING_UV) / 1000;
 }
 
-static void convert_ibat_to_adc_val(int *val, int scaling_factor)
+static void convert_ibat_to_adc_val(struct bcl_device *bcl_perph, int *val, int scaling_factor)
 {
 	/*
 	 * Threshold register can be bit shifted from ADC MSB.
 	 * So the scaling factor is half in those cases.
 	 */
-	if (ibat_use_qg_adc)
+	if (bcl_perph->ibat_use_qg_adc)
 		*val = (int)div_s64(*val * 2000 * 2, scaling_factor);
-	else if (no_bit_shift)
+	else if (bcl_perph->no_bit_shift)
 		*val = (int)div_s64(*val * 1000 * bcl_ibat_ext_ranges[BCL_IBAT_RANGE_LVL0],
 				scaling_factor);
 	else
@@ -230,10 +270,10 @@ static void convert_ibat_to_adc_val(int *val, int scaling_factor)
 
 }
 
-static void convert_adc_to_ibat_val(int *val, int scaling_factor)
+static void convert_adc_to_ibat_val(struct bcl_device *bcl_perph, int *val, int scaling_factor)
 {
 	/* Scaling factor will be half if ibat_use_qg_adc is true */
-	if (ibat_use_qg_adc)
+	if (bcl_perph->ibat_use_qg_adc)
 		*val = (int)div_s64(*val * scaling_factor, 2 * 1000);
 	else
 		*val = (int)div_s64(*val * scaling_factor,
@@ -280,25 +320,27 @@ static int bcl_set_ibat(void *data, int low, int high)
 
 	ibat_ua = thresh_value;
 	if (bat_data->dev->ibat_ccm_enabled)
-		convert_ibat_to_adc_val(&thresh_value,
+		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
 				BCL_IBAT_CCM_SCALING_UA *
 				bat_data->dev->ibat_ext_range_factor);
 	else if (bat_data->dev->dig_major >= BCL_GEN3_MAJOR_REV)
-		convert_ibat_to_adc_val(&thresh_value,
+		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
 				BCL_IBAT_SCALING_REV4_UA *
 				bat_data->dev->ibat_ext_range_factor);
 	else
-		convert_ibat_to_adc_val(&thresh_value,
+		convert_ibat_to_adc_val(bat_data->dev, &thresh_value,
 				BCL_IBAT_SCALING_UA *
 				bat_data->dev->ibat_ext_range_factor);
 	val = (int8_t)thresh_value;
 	switch (bat_data->type) {
 	case BCL_IBAT_LVL0:
+	case BCL_2S_IBAT_LVL0:
 		addr = BCL_IBAT_HIGH;
 		pr_debug("ibat high threshold:%d mA ADC:0x%02x\n",
 				ibat_ua, val);
 		break;
 	case BCL_IBAT_LVL1:
+	case BCL_2S_IBAT_LVL1:
 		addr = BCL_IBAT_TOO_HIGH;
 		if (bat_data->dev->dig_major >= BCL_GEN3_MAJOR_REV &&
 			bat_data->dev->bcl_param_1 & BCL_PARAM_HAS_IBAT_ADC)
@@ -348,14 +390,14 @@ static int bcl_read_ibat(void *data, int *adc_value)
 		*adc_value = bat_data->last_val;
 	} else {
 		if (bat_data->dev->ibat_ccm_enabled)
-			convert_adc_to_ibat_val(adc_value,
+			convert_adc_to_ibat_val(bat_data->dev, adc_value,
 				BCL_IBAT_CCM_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 		else if (bat_data->dev->dig_major >= BCL_GEN3_MAJOR_REV)
-			convert_adc_to_ibat_val(adc_value,
+			convert_adc_to_ibat_val(bat_data->dev, adc_value,
 				BCL_IBAT_SCALING_REV4_UA *
 					bat_data->dev->ibat_ext_range_factor);
 		else
-			convert_adc_to_ibat_val(adc_value,
+			convert_adc_to_ibat_val(bat_data->dev, adc_value,
 				BCL_IBAT_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 		bat_data->last_val = *adc_value;
 	}
@@ -397,7 +439,7 @@ static int bcl_get_vbat_trip(struct thermal_zone_device *tzd,
 
 	if (addr == BCL_VBAT_ADC_LOW) {
 		*trip = val;
-		convert_adc_to_vbat_thresh_val(trip);
+		convert_adc_to_vbat_thresh_val(bat_data->dev, trip);
 		pr_debug("vbat trip: %d mV ADC:0x%02x\n", *trip, val);
 	} else {
 		*trip = BCL_VBAT_THRESH_BASE + val * 25;
@@ -466,6 +508,15 @@ static struct thermal_zone_params vbat_tzp = {
 	.offset = 0
 };
 
+
+static int bcl_tz_change_mode(void *data, enum thermal_device_mode mode)
+{
+	struct bcl_peripheral_data *bat_data =
+		(struct bcl_peripheral_data *)data;
+
+	return qti_tz_change_mode(bat_data->tz_dev, mode);
+}
+
 static int bcl_get_trend(void *data, int trip, enum thermal_trend *trend)
 {
 	struct bcl_peripheral_data *bat_data =
@@ -485,6 +536,9 @@ static int bcl_set_lbat(void *data, int low, int high)
 {
 	struct bcl_peripheral_data *bat_data =
 		(struct bcl_peripheral_data *)data;
+
+	if (bat_data->irq_freed)
+		return 0;
 
 	mutex_lock(&bat_data->state_trans_lock);
 
@@ -544,6 +598,8 @@ static int bcl_read_lbat(void *data, int *adc_value)
 			bat_data->last_val);
 	if (bcl_perph->param[BCL_IBAT_LVL0].tz_dev)
 		bcl_read_ibat(&bcl_perph->param[BCL_IBAT_LVL0], &ibat);
+	else if (bcl_perph->param[BCL_2S_IBAT_LVL0].tz_dev)
+		bcl_read_ibat(&bcl_perph->param[BCL_2S_IBAT_LVL0], &ibat);
 	if (bcl_perph->param[BCL_VBAT_LVL0].tz_dev)
 		bcl_read_vbat_tz(bcl_perph->param[BCL_VBAT_LVL0].tz_dev, &vbat);
 	BCL_IPC(bcl_perph, "LVLbat:%d val:%d\n", bat_data->type,
@@ -561,12 +617,60 @@ static irqreturn_t bcl_handle_irq(int irq, void *data)
 	int ibat = 0, vbat = 0;
 	struct bcl_device *bcl_perph;
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	struct timeval tv;
+	static struct power_supply *batt_psy;
+	union power_supply_propval psy = {0,};
+	int err = 0;
+	int vol = 0,curr = 0;
+	int level = -1,id = -1;
+	long time_s = 0;
+#endif
+
 	if (!perph_data->tz_dev)
 		return IRQ_HANDLED;
 	bcl_perph = perph_data->dev;
 	bcl_read_register(bcl_perph, BCL_IRQ_STATUS, &irq_status);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if (bcl_perph->support_track) {
+		if (irq_status & 0x04) {
+			level = 2;
+		} else if (irq_status & 0x02) {
+			level = 1;
+		} else if (irq_status & 0x01) {
+			level = 0;
+		}
+		do_gettimeofday(&tv);
+		time_s = tv.tv_sec;
+		id = bcl_perph->id;
+		if (!batt_psy)
+			batt_psy = power_supply_get_by_name("battery");
+		if (batt_psy) {
+			err = power_supply_get_property(batt_psy,
+				POWER_SUPPLY_PROP_VOLTAGE_NOW, &psy);
+			if (err) {
+				pr_err("can't get battery voltage:%d\n",err);
+			} else {
+				vol = psy.intval / 1000;
+			}
+
+			err = power_supply_get_property(batt_psy,
+				POWER_SUPPLY_PROP_CURRENT_NOW, &psy);
+			if (err) {
+				pr_err("can't get battery current:%d\n",err);
+			} else {
+				curr = psy.intval;
+			}
+		}
+		trace_bcl_stat(time_s, id, level, vol, curr);
+	}
+#endif
+
 	if (bcl_perph->param[BCL_IBAT_LVL0].tz_dev)
 		bcl_read_ibat(&bcl_perph->param[BCL_IBAT_LVL0], &ibat);
+	else if (bcl_perph->param[BCL_2S_IBAT_LVL0].tz_dev)
+		bcl_read_ibat(&bcl_perph->param[BCL_2S_IBAT_LVL0], &ibat);
 	if (bcl_perph->param[BCL_VBAT_LVL0].tz_dev)
 		bcl_read_vbat_tz(bcl_perph->param[BCL_VBAT_LVL0].tz_dev, &vbat);
 
@@ -642,7 +746,9 @@ static int bcl_get_devicetree_data(struct platform_device *pdev,
 	int ret = 0;
 	const __be32 *prop = NULL;
 	struct device_node *dev_node = pdev->dev.of_node;
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u8 h0_dgl_time, l0_dgl_time,h1_dgl_time,l1_dgl_time;
+#endif
 	prop = of_get_address(dev_node, 0, NULL, NULL);
 	if (prop) {
 		bcl_perph->fg_bcl_addr = be32_to_cpu(*prop);
@@ -652,15 +758,47 @@ static int bcl_get_devicetree_data(struct platform_device *pdev,
 		return -ENODEV;
 	}
 
-	ibat_use_qg_adc =  of_property_read_bool(dev_node,
+	bcl_perph->ibat_use_qg_adc =  of_property_read_bool(dev_node,
 				"qcom,ibat-use-qg-adc-5a");
-	no_bit_shift =  of_property_read_bool(dev_node,
+	bcl_perph->no_bit_shift =  of_property_read_bool(dev_node,
 				"qcom,pmic7-threshold");
 	bcl_perph->ibat_ccm_enabled =  of_property_read_bool(dev_node,
 						"qcom,ibat-ccm-hw-support");
 
 	ret = bcl_get_ibat_ext_range_factor(pdev,
 					&bcl_perph->ibat_ext_range_factor);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if(!of_property_read_u8(dev_node, "bcl,h0_dgl_time", &h0_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_H0_DGL_CTL, h0_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_H0_DGL_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,l0_dgl_time", &l0_dgl_time)) {
+		ret = bcl_write_register(bcl_perph, BCL_L0_DGL_CLR_CTL, l0_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_L0_DGL_CLR_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,h1_dgl_time", &h1_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_H1_DGL_CTL, h1_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_H1_DGL_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,l1_dgl_time", &l1_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_L1_DGL_CLR_CTL, l1_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_L1_DGL_CLR_CTL ret:%d\n", ret);
+	}
+
+	bcl_perph->support_track =  of_property_read_bool(dev_node,"bcl,support_track");
+	pr_err("bcl support_track:%d, id:%d\n", bcl_perph->support_track, bcl_perph->id);
+#endif
 
 	return ret;
 }
@@ -766,11 +904,59 @@ static void bcl_ibat_init(struct platform_device *pdev,
 	thermal_zone_device_update(ibat->tz_dev, THERMAL_DEVICE_UP);
 }
 
+static int bcl_get_ibat_config(struct platform_device *pdev,
+		uint32_t *ibat_config)
+{
+	int ret = 0;
+	const char *name;
+	struct nvmem_cell *cell;
+	size_t len;
+	char *buf;
+
+	ret = of_property_read_string(pdev->dev.of_node, "nvmem-cell-names", &name);
+	if (ret) {
+		*ibat_config = 0;
+		pr_debug("Default ibat config enabled %u\n", *ibat_config);
+		return 0;
+	}
+
+	cell = nvmem_cell_get(&pdev->dev, name);
+	if (IS_ERR(cell)) {
+		dev_err(&pdev->dev, "failed to get nvmem cell %s\n", name);
+		return PTR_ERR(cell);
+	}
+
+	buf = nvmem_cell_read(cell, &len);
+	nvmem_cell_put(cell);
+	if (IS_ERR_OR_NULL(buf)) {
+		dev_err(&pdev->dev, "failed to read nvmem cell %s\n", name);
+		return PTR_ERR(buf);
+	}
+
+	if (len <= 0 || len > sizeof(uint32_t)) {
+		dev_err(&pdev->dev, "nvmem cell length out of range %d\n", len);
+		kfree(buf);
+		return -EINVAL;
+	}
+	memcpy(ibat_config, buf, min(len, sizeof(*ibat_config)));
+	kfree(buf);
+
+	return 0;
+}
 static void bcl_probe_ibat(struct platform_device *pdev,
 					struct bcl_device *bcl_perph)
 {
-	bcl_ibat_init(pdev, BCL_IBAT_LVL0, bcl_perph);
-	bcl_ibat_init(pdev, BCL_IBAT_LVL1, bcl_perph);
+	uint32_t bcl_config = 0;
+
+	bcl_get_ibat_config(pdev, &bcl_config);
+
+	if (bcl_config == 1) {
+		bcl_ibat_init(pdev, BCL_2S_IBAT_LVL0, bcl_perph);
+		bcl_ibat_init(pdev, BCL_2S_IBAT_LVL1, bcl_perph);
+	} else {
+		bcl_ibat_init(pdev, BCL_IBAT_LVL0, bcl_perph);
+		bcl_ibat_init(pdev, BCL_IBAT_LVL1, bcl_perph);
+	}
 }
 
 static void bcl_lvl_init(struct platform_device *pdev,
@@ -789,6 +975,7 @@ static void bcl_lvl_init(struct platform_device *pdev,
 	lbat->ops.get_temp = bcl_read_lbat;
 	lbat->ops.set_trips = bcl_set_lbat;
 	lbat->ops.get_trend = bcl_get_trend;
+	lbat->ops.change_mode = bcl_tz_change_mode;
 
 	lbat->tz_dev = thermal_zone_of_sensor_register(&pdev->dev,
 				type, lbat, &lbat->ops);
@@ -800,7 +987,6 @@ static void bcl_lvl_init(struct platform_device *pdev,
 		return;
 	}
 	thermal_zone_device_update(lbat->tz_dev, THERMAL_DEVICE_UP);
-	qti_update_tz_ops(lbat->tz_dev, true);
 }
 
 static void bcl_probe_lvls(struct platform_device *pdev,
@@ -858,7 +1044,6 @@ static int bcl_remove(struct platform_device *pdev)
 			continue;
 		thermal_zone_of_sensor_unregister(&pdev->dev,
 				bcl_perph->param[i].tz_dev);
-		qti_update_tz_ops(bcl_perph->param[i].tz_dev, false);
 	}
 
 	return 0;
@@ -880,7 +1065,9 @@ static int bcl_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	bcl_perph = bcl_devices[bcl_device_ct];
 	bcl_perph->dev = &pdev->dev;
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	bcl_perph->id = bcl_device_ct;
+#endif
 	bcl_perph->regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!bcl_perph->regmap) {
 		dev_err(&pdev->dev, "Couldn't get parent's regmap\n");
@@ -918,6 +1105,67 @@ static int bcl_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int bcl_freeze(struct device *dev)
+{
+	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
+	int i;
+	struct bcl_peripheral_data *bcl_data;
+
+	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
+		bcl_data = &bcl_perph->param[i];
+
+		mutex_lock(&bcl_data->state_trans_lock);
+		if (bcl_data->irq_num > 0 && bcl_data->irq_enabled) {
+			disable_irq(bcl_data->irq_num);
+			bcl_data->irq_enabled = false;
+		}
+		devm_free_irq(dev, bcl_data->irq_num, bcl_data);
+		bcl_data->irq_freed = true;
+		mutex_unlock(&bcl_data->state_trans_lock);
+	}
+	return 0;
+}
+
+static int bcl_restore(struct device *dev)
+{
+	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
+	struct bcl_peripheral_data *bcl_data;
+	int ret = 0, i;
+
+	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
+		bcl_data = &bcl_perph->param[i];
+		mutex_lock(&bcl_data->state_trans_lock);
+		if (bcl_data->irq_num > 0 && !bcl_data->irq_enabled) {
+			ret = devm_request_threaded_irq(dev,
+					bcl_data->irq_num, NULL, bcl_handle_irq,
+					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+					bcl_int_names[i], bcl_data);
+			if (ret) {
+				dev_err(dev,
+					"Error requesting trip irq. err:%d\n",
+					ret);
+				mutex_unlock(&bcl_data->state_trans_lock);
+				return -EINVAL;
+			}
+			disable_irq_nosync(bcl_data->irq_num);
+			bcl_data->irq_freed = false;
+		}
+		mutex_unlock(&bcl_data->state_trans_lock);
+
+		if (bcl_data->tz_dev)
+			thermal_zone_device_update(bcl_data->tz_dev, THERMAL_DEVICE_UP);
+	}
+	bcl_configure_bcl_peripheral(bcl_perph);
+
+	return 0;
+}
+
+
+static const struct dev_pm_ops bcl_pm_ops = {
+	.freeze = bcl_freeze,
+	.restore = bcl_restore,
+};
+
 static const struct of_device_id bcl_match[] = {
 	{
 		.compatible = "qcom,bcl-v5",
@@ -930,6 +1178,7 @@ static struct platform_driver bcl_driver = {
 	.remove = bcl_remove,
 	.driver = {
 		.name           = BCL_DRIVER_NAME,
+		.pm = &bcl_pm_ops,
 		.of_match_table = bcl_match,
 	},
 };

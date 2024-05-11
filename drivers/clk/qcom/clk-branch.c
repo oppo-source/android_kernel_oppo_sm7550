@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013, 2016, 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -61,16 +62,39 @@ static bool clk_branch2_check_halt(const struct clk_branch *br, bool enabling)
 
 	if (enabling) {
 		val &= mask;
+
+		if (br->halt_check == BRANCH_HALT_INVERT)
+			return (val & BRANCH_CLK_OFF) == BRANCH_CLK_OFF;
+
 		return (val & BRANCH_CLK_OFF) == 0 ||
 			val == BRANCH_NOC_FSM_STATUS_ON;
 	} else {
+		if (br->halt_check == BRANCH_HALT_INVERT)
+			return (val & BRANCH_CLK_OFF) == 0;
+
 		return val & BRANCH_CLK_OFF;
 	}
+}
+
+static int get_branch_timeout(const struct clk_branch *br)
+{
+	int rate, period_us, timeout;
+
+	/*
+	 * The time it takes a clock branch to toggle is roughly 3 clock cycles.
+	 */
+	rate = clk_hw_get_rate(&br->clkr.hw);
+	period_us = 1000000 / rate;
+	timeout = 3 * period_us;
+
+	return max(timeout, 200);
 }
 
 static int clk_branch_wait(const struct clk_branch *br, bool enabling,
 		bool (check_halt)(const struct clk_branch *, bool))
 {
+	int timeout, count;
+
 	bool voted = br->halt_check & BRANCH_VOTED;
 	/*
 	 * Skip checking halt bit if we're explicitly ignoring the bit or the
@@ -83,16 +107,17 @@ static int clk_branch_wait(const struct clk_branch *br, bool enabling,
 		udelay(10);
 	} else if (br->halt_check == BRANCH_HALT_ENABLE ||
 		   br->halt_check == BRANCH_HALT ||
+		   br->halt_check == BRANCH_HALT_INVERT ||
 		   (enabling && voted)) {
-		int count = 200;
+		timeout = get_branch_timeout(br);
 
-		while (count-- > 0) {
+		for (count = timeout; count > 0; count--) {
 			if (check_halt(br, enabling))
 				return 0;
 			udelay(1);
 		}
-		WARN_CLK((struct clk_hw *)&br->clkr.hw, 1, "status stuck at 'o%s'",
-				enabling ? "ff" : "n");
+		WARN_CLK((struct clk_hw *)&br->clkr.hw, 1, "status stuck at 'o%s' after %d us",
+			 enabling ? "ff" : "n", timeout);
 		return -EBUSY;
 	}
 	return 0;
@@ -311,6 +336,21 @@ static void clk_branch2_mem_disable(struct clk_hw *hw)
 	return clk_branch2_disable(hw);
 }
 
+static void clk_branch_restore_context_aon(struct clk_hw *hw)
+{
+	if (clk_enable_regmap(hw))
+		pr_err("Failed to enable %s\n", clk_hw_get_name(hw));
+}
+
+static void clk_branch_restore_context(struct clk_hw *hw)
+{
+	if (!(clk_hw_get_flags(hw) & CLK_IS_CRITICAL))
+		return;
+
+	if (clk_enable_regmap(hw))
+		pr_err("Failed to enable %s\n", clk_hw_get_name(hw));
+}
+
 const struct clk_ops clk_branch2_ops = {
 	.prepare = clk_prepare_regmap,
 	.unprepare = clk_unprepare_regmap,
@@ -321,11 +361,13 @@ const struct clk_ops clk_branch2_ops = {
 	.is_enabled = clk_is_enabled_regmap,
 	.init = clk_branch2_init,
 	.debug_init = clk_branch_debug_init,
+	.restore_context = clk_branch_restore_context,
 };
 EXPORT_SYMBOL_GPL(clk_branch2_ops);
 
 const struct clk_ops clk_branch2_aon_ops = {
 	.enable = clk_branch2_enable,
+	.restore_context = clk_branch_restore_context_aon,
 	.is_enabled = clk_is_enabled_regmap,
 	.init = clk_branch2_init,
 	.debug_init = clk_branch_debug_init,

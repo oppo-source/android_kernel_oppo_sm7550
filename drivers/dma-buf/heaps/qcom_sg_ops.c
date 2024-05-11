@@ -19,6 +19,7 @@
 #include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
 #include <linux/dma-heap.h>
+#include <linux/dma-map-ops.h>
 #include <linux/err.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
@@ -30,6 +31,10 @@
 #include <linux/msm_dma_iommu_mapping.h>
 
 #include "qcom_sg_ops.h"
+
+//add by zhenghaiqing@oppo.com for dma debug
+#define CREATE_TRACE_POINTS
+#include "qcom_dma_trace.h"
 
 static struct sg_table *dup_sg_table(struct sg_table *table)
 {
@@ -123,14 +128,18 @@ static struct sg_table *qcom_sg_map_dma_buf(struct dma_buf_attachment *attachmen
 	if (buffer->uncached || !mem_buf_vmperm_can_cmo(vmperm))
 		attrs |= DMA_ATTR_SKIP_CPU_SYNC;
 
-	if (attrs & DMA_ATTR_DELAYED_UNMAP)
+	if (attrs & DMA_ATTR_DELAYED_UNMAP) {
 		ret = msm_dma_map_sgtable(attachment->dev, table, direction,
 					  attachment->dmabuf, attrs);
-	else
+	} else if (!a->mapped) {
 		ret = dma_map_sgtable(attachment->dev, table, direction, attrs);
+	} else {
+		dev_err(attachment->dev, "Error: Dma-buf is already mapped!\n");
+		ret = -EBUSY;
+	}
 
 	if (ret) {
-		table = ERR_PTR(-ENOMEM);
+		table = ERR_PTR(ret);
 		goto err_map_sgtable;
 	}
 
@@ -248,6 +257,9 @@ static int sgl_sync_range(struct device *dev, struct scatterlist *sgl,
 			break;
 
 		if (i > 0) {
+			if (!get_dma_ops(dev))
+				return 0;
+
 			pr_warn_ratelimited("Partial cmo only supported with 1 segment\n"
 				"is dma_set_max_seg_size being set on dev:%s\n",
 				dev_name(dev));
@@ -513,6 +525,19 @@ static void qcom_sg_release(struct dma_buf *dmabuf)
 		return;
 
 	msm_dma_buf_freed(buffer);
+
+#ifdef CONFIG_QCOM_DMABUF_HEAPS_SYSTEM
+	if (is_system_heap_deferred_free(buffer->free)) {
+                //add by zhenghaiqing@oppo.com for dma debug
+                trace_qcom_dma_free(buffer->len, dmabuf->android_kabi_reserved2, dmabuf->exp_name?:"NULL");
+		if (atomic64_sub_return(buffer->len, &qcom_system_heap_total) < 0) {
+			pr_info("warn: %s, total memory underflow, 0x%lx!!, reset as 0\n",
+				__func__, atomic64_read(&qcom_system_heap_total));
+			atomic64_set(&qcom_system_heap_total, 0);
+		}
+	}
+#endif /* CONFIG_QCOM_DMABUF_HEAPS_SYSTEM */
+
 	buffer->free(buffer);
 }
 

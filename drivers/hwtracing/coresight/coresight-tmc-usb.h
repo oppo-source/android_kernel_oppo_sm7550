@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CORESIGHT_TMC_USB_H
@@ -21,25 +21,15 @@ enum tmc_etr_usb_mode {
 	TMC_ETR_USB_SW,
 };
 
-struct tmc_usb_bam_data {
-	struct sps_bam_props	props;
-	unsigned long		handle;
-	struct sps_pipe		*pipe;
-	struct sps_connect	connect;
-	uint32_t		src_pipe_idx;
-	unsigned long		dest;
-	uint32_t		dest_pipe_idx;
-	struct sps_mem_buffer	desc_fifo;
-	struct sps_mem_buffer	data_fifo;
-	bool			enable;
-};
-
 struct tmc_usb_data {
+	enum tmc_etr_usb_mode	usb_mode;
 	struct usb_qdss_ch	*usbch;
 	struct tmc_usb_bam_data	*bamdata;
-	bool			enable_to_bam;
-	enum tmc_etr_usb_mode	usb_mode;
 	struct tmc_drvdata	*tmcdrvdata;
+	bool			data_overwritten;
+	bool			enable_to_bam;
+	u64			drop_data_size;
+	u32			buf_size;
 };
 
 extern int tmc_usb_enable(struct tmc_usb_data *usb_data);

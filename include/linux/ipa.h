@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021, 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _IPA_H_
@@ -28,6 +28,10 @@
 #define BUFF_ABOVE_HIGH_THRESHOLD_FOR_COAL_PIPE           2
 #define BUFF_BELOW_LOW_THRESHOLD_FOR_DEFAULT_PIPE         3
 #define BUFF_BELOW_LOW_THRESHOLD_FOR_COAL_PIPE            4
+#define BUFF_ABOVE_HIGH_THRESHOLD_FOR_LL_PIPE             5
+#define BUFF_BELOW_LOW_THRESHOLD_FOR_LL_PIPE              6
+#define FREE_PAGE_TASK_SCHEDULED                          7
+#define FREE_PAGE_TASK_SCHEDULED_LL                       8
 
 /**
  * the attributes of the socksv5 options
@@ -1806,7 +1810,7 @@ bool ipa_is_ready(void);
 void ipa_proxy_clk_vote(void);
 void ipa_proxy_clk_unvote(void);
 
-#ifdef CONFIG_DEEPSLEEP
+#if IS_ENABLED(CONFIG_DEEPSLEEP) || IS_ENABLED(CONFIG_HIBERNATION)
 int ipa_fmwk_deepsleep_entry_ipa(void);
 
 int ipa_fmwk_deepsleep_exit_ipa(void);

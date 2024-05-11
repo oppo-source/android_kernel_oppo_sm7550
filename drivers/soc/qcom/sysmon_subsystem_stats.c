@@ -8,6 +8,7 @@
 #include <linux/platform_device.h>
 #include <linux/soc/qcom/smem.h>
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/soc/qcom/sysmon_subsystem_stats.h>
 
 #define SYSMON_SMEM_ID			634
@@ -18,6 +19,7 @@
 #define DSPPMSTATS_SMEM_ID				624
 #define SYS_CLK_TICKS_PER_MS		19200
 #define DSPPMSTATS_NUMPD		5
+#define HMX_HVX_PMU_EVENTS_NA	0xFFFF
 
 struct pd_clients {
 	int pid;
@@ -35,6 +37,7 @@ struct sysmon_smem_stats {
 	bool smem_init_adsp;
 	bool smem_init_cdsp;
 	bool smem_init_slpi;
+	bool smem_init_cdsp_v2;
 	struct sysmon_smem_power_stats *sysmon_power_stats_adsp;
 	struct sysmon_smem_power_stats *sysmon_power_stats_cdsp;
 	struct sysmon_smem_power_stats *sysmon_power_stats_slpi;
@@ -54,16 +57,32 @@ struct sysmon_smem_stats {
 	struct dentry *debugfs_dir;
 	struct dentry *debugfs_master_adsp_stats;
 	struct dentry *debugfs_master_cdsp_stats;
+	u32 *hmx_util;
+	u32 *hvx_util;
 };
 
 enum feature_id {
 	SYSMONSTATS_Q6_LOAD_FEATUREID = 1,
 	SYSMONSTATS_Q6_EVENT_FEATUREID,
-	SYSMON_POWER_STATS_FEATUREID
+	SYSMON_POWER_STATS_FEATUREID,
+	SYSMON_HMX_UTIL_FEATUREID,
+	SYSMON_HVX_UTIL_FEATUREID
 };
 
 struct sysmon_smem_q6_load_stats {
 	u32 q6load_avg;
+	u32 Last_update_time_load_lsb;
+	u32 Last_update_time_load_msb;
+};
+
+struct sysmon_smem_hvx_stats {
+	u32 hvx_util_avg;
+	u32 Last_update_time_load_lsb;
+	u32 Last_update_time_load_msb;
+};
+
+struct sysmon_smem_hmx_stats {
+	u32 hmx_util_avg;
 	u32 Last_update_time_load_lsb;
 	u32 Last_update_time_load_msb;
 };
@@ -149,8 +168,37 @@ static void update_sysmon_smem_pointers(void *smem_pointer, enum dsp_id_t dsp_id
 				size = 0;
 			}
 		break;
+		case SYSMON_HMX_UTIL_FEATUREID:
+			if (!IS_ERR_OR_NULL(smem_pointer + size_of_u32)) {
+				if (dsp_id == CDSP) {
+					g_sysmon_stats.hmx_util =
+							(u32 *)(smem_pointer + size_of_u32);
+				} else
+					pr_err("%s:subsystem not supported %d\n",
+						__func__, SYSMON_HMX_UTIL_FEATUREID);
+			} else {
+				pr_err("%s: Failed to fetch %d feature pointer\n",
+					__func__, SYSMON_HMX_UTIL_FEATUREID);
+				size = 0;
+			}
+		break;
+		case SYSMON_HVX_UTIL_FEATUREID:
+			if (!IS_ERR_OR_NULL(smem_pointer + size_of_u32)) {
+				if (dsp_id == CDSP) {
+					g_sysmon_stats.hvx_util =
+							(u32 *)(smem_pointer + size_of_u32);
+				} else
+					pr_err("%s:subsystem not supported %d\n",
+						__func__, SYSMON_HVX_UTIL_FEATUREID);
+			} else {
+				pr_err("%s: Failed to fetch %d feature pointer\n",
+					__func__, SYSMON_HVX_UTIL_FEATUREID);
+				size = 0;
+			}
+		break;
 		default:
-			pr_err("%s: Requested feature not found\n", __func__);
+			pr_err("%s: Requested feature not found, Feature:%u\n",
+					__func__, feature);
 		break;
 		}
 		if (!IS_ERR_OR_NULL(smem_pointer + size_rcvd)
@@ -175,30 +223,33 @@ static void sysmon_smem_init_adsp(void)
 
 	g_sysmon_stats.dsppm_stats_adsp = qcom_smem_get(ADSP,
 						DSPPMSTATS_SMEM_ID,
-						NULL);
+						&size);
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.dsppm_stats_adsp)) {
-		pr_err("%s:Failed to get fetch dsppm stats from SMEM for ADSP: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.dsppm_stats_adsp));
+	if (IS_ERR_OR_NULL(g_sysmon_stats.dsppm_stats_adsp) ||
+		(sizeof(struct dsppm_stats) > size)) {
+		pr_err("%s:Failed to get fetch dsppm stats from SMEM for ADSP: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.dsppm_stats_adsp), size);
 		g_sysmon_stats.smem_init_adsp = false;
 	}
 
 	g_sysmon_stats.sleep_stats_adsp = qcom_smem_get(ADSP,
 						SLEEPSTATS_SMEM_ID_ADSP,
-						NULL);
+						&size);
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_adsp)) {
-		pr_err("%s:Failed to get fetch sleep data from SMEM for ADSP: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_adsp));
+	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_adsp) ||
+		(sizeof(struct sleep_stats) > size)) {
+		pr_err("%s:Failed to get fetch sleep data from SMEM for ADSP: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_adsp), size);
 		g_sysmon_stats.smem_init_adsp = false;
 	}
 
 	g_sysmon_stats.sleep_lpi_adsp = qcom_smem_get(ADSP,
 						SLEEPSTATS_LPI_SMEM_ID,
-						NULL);
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_lpi_adsp)) {
-		pr_err("%s:Failed to get fetch LPI sleep data from SMEM for ADSP: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.sleep_lpi_adsp));
+						&size);
+	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_lpi_adsp) ||
+		(sizeof(struct sleep_stats_island) > size)) {
+		pr_err("%s:Failed to get fetch LPI sleep data from SMEM for ADSP: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.sleep_lpi_adsp), size);
 		g_sysmon_stats.smem_init_adsp = false;
 	}
 
@@ -207,8 +258,8 @@ static void sysmon_smem_init_adsp(void)
 						&size);
 
 	if (IS_ERR_OR_NULL(smem_pointer_adsp) || !size) {
-		pr_err("%s:Failed to get fetch sysmon data from SMEM for ADSP: %d\n",
-				__func__, PTR_ERR(smem_pointer_adsp));
+		pr_err("%s:Failed to get fetch sysmon data from SMEM for ADSP: %d, size: %d\n",
+				__func__, PTR_ERR(smem_pointer_adsp), size);
 		g_sysmon_stats.smem_init_adsp = false;
 	}
 
@@ -245,24 +296,27 @@ static void sysmon_smem_init_cdsp(void)
 	void *smem_pointer_cdsp = NULL;
 
 	g_sysmon_stats.smem_init_cdsp = true;
+	g_sysmon_stats.smem_init_cdsp_v2 = true;
 
 	g_sysmon_stats.dsppm_stats_cdsp = qcom_smem_get(CDSP,
 						DSPPMSTATS_SMEM_ID,
-						NULL);
+						&size);
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.dsppm_stats_cdsp)) {
-		pr_err("%s:Failed to get fetch dsppm stats from SMEM for CDSP: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.dsppm_stats_cdsp));
+	if (IS_ERR_OR_NULL(g_sysmon_stats.dsppm_stats_cdsp) ||
+		(sizeof(struct dsppm_stats) > size)) {
+		pr_err("%s:Failed to get fetch dsppm stats from SMEM for CDSP: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.dsppm_stats_cdsp), size);
 		g_sysmon_stats.smem_init_cdsp = false;
 	}
 
 	g_sysmon_stats.sleep_stats_cdsp = qcom_smem_get(CDSP,
 						SLEEPSTATS_SMEM_ID_CDSP,
-						NULL);
+						&size);
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_cdsp)) {
-		pr_err("%s:Failed to get fetch sleep data from SMEM for CDSP: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_cdsp));
+	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_cdsp) ||
+		(sizeof(struct sleep_stats) > size)) {
+		pr_err("%s:Failed to get fetch sleep data from SMEM for CDSP: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_cdsp), size);
 		g_sysmon_stats.smem_init_cdsp = false;
 	}
 
@@ -270,8 +324,8 @@ static void sysmon_smem_init_cdsp(void)
 							SYSMON_SMEM_ID,
 							&size);
 	if (IS_ERR_OR_NULL(smem_pointer_cdsp) || !size) {
-		pr_err("%s:Failed to get fetch data from SMEM for CDSP: %d\n",
-				__func__, PTR_ERR(smem_pointer_cdsp));
+		pr_err("%s:Failed to get fetch data from SMEM for CDSP: %d, size: %d\n",
+				__func__, PTR_ERR(smem_pointer_cdsp), size);
 		g_sysmon_stats.smem_init_cdsp = false;
 	}
 
@@ -300,6 +354,23 @@ static void sysmon_smem_init_cdsp(void)
 				__func__, g_sysmon_stats.q6_avg_load_cdsp);
 		g_sysmon_stats.smem_init_cdsp = false;
 	}
+
+	if (IS_ERR_OR_NULL(g_sysmon_stats.hmx_util)) {
+
+		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+				"hmx_util: %x\n",
+				__func__, g_sysmon_stats.hmx_util);
+		g_sysmon_stats.smem_init_cdsp_v2 = false;
+	}
+
+	if (IS_ERR_OR_NULL(g_sysmon_stats.hvx_util)) {
+
+		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+				"hmx_util: %x\n",
+				__func__, g_sysmon_stats.hvx_util);
+		g_sysmon_stats.smem_init_cdsp_v2 = false;
+	}
+
 }
 static void sysmon_smem_init_slpi(void)
 {
@@ -310,20 +381,22 @@ static void sysmon_smem_init_slpi(void)
 
 	g_sysmon_stats.sleep_stats_slpi = qcom_smem_get(SLPI,
 						SLEEPSTATS_SMEM_ID_SLPI,
-						NULL);
+						&size);
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_slpi)) {
-		pr_err("%s:Failed to get fetch sleep data from SMEM for SLPI: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_slpi));
+	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_stats_slpi) ||
+		(sizeof(struct sleep_stats) > size)) {
+		pr_err("%s:Failed to get fetch sleep data from SMEM for SLPI: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.sleep_stats_slpi), size);
 		g_sysmon_stats.smem_init_slpi = false;
 	}
 
 	g_sysmon_stats.sleep_lpi_slpi = qcom_smem_get(SLPI,
 						SLEEPSTATS_LPI_SMEM_ID,
-						NULL);
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_lpi_slpi)) {
-		pr_err("%s:Failed to get fetch LPI sleep data from SMEM for SLPI: %d\n",
-				__func__, PTR_ERR(g_sysmon_stats.sleep_lpi_slpi));
+						&size);
+	if (IS_ERR_OR_NULL(g_sysmon_stats.sleep_lpi_slpi) ||
+		(sizeof(struct sleep_stats_island) > size)) {
+		pr_err("%s:Failed to get fetch LPI sleep data from SMEM for SLPI: %d, size: %d\n",
+				__func__, PTR_ERR(g_sysmon_stats.sleep_lpi_slpi), size);
 		g_sysmon_stats.smem_init_slpi = false;
 	}
 
@@ -332,8 +405,8 @@ static void sysmon_smem_init_slpi(void)
 							&size);
 
 	if (IS_ERR_OR_NULL(smem_pointer_slpi) || !size) {
-		pr_err("%s:Failed to get fetch data from SMEM for SLPI: %d\n",
-				__func__, PTR_ERR(smem_pointer_slpi));
+		pr_err("%s:Failed to get fetch data from SMEM for SLPI: %d, size: %d\n",
+				__func__, PTR_ERR(smem_pointer_slpi), size);
 	}
 
 	update_sysmon_smem_pointers(smem_pointer_slpi, SLPI, size);
@@ -362,6 +435,126 @@ static void sysmon_smem_init_slpi(void)
 		g_sysmon_stats.smem_init_slpi = false;
 	}
 }
+/**
+ * sysmon_read_hmx_util() - Checks for CDSP power collapse
+ * and resets the HMX utilization to zero if dsp is power collapsed.
+ */
+static u32 sysmon_read_hmx_util(void)
+{
+	struct sysmon_smem_hmx_stats sysmon_hmx_util;
+	u64 curr_timestamp = __arch_counter_get_cntvct();
+	u64 last_hmx_update_at = 0;
+
+	memcpy(&sysmon_hmx_util,
+		g_sysmon_stats.hmx_util,
+		sizeof(struct sysmon_smem_hmx_stats));
+
+	last_hmx_update_at =
+		(u64) (((u64)sysmon_hmx_util.Last_update_time_load_msb << 32)|
+				sysmon_hmx_util.Last_update_time_load_lsb);
+
+	if ((curr_timestamp > last_hmx_update_at) &&
+		((curr_timestamp - last_hmx_update_at) / SYS_CLK_TICKS_PER_MS) > 100) {
+		sysmon_hmx_util.hmx_util_avg = 0;
+	}
+
+	if (sysmon_hmx_util.hmx_util_avg == HMX_HVX_PMU_EVENTS_NA)
+		pr_err("HMX PMU not registered, user ovveride pmu counter\n");
+
+	return sysmon_hmx_util.hmx_util_avg;
+}
+
+/**
+ * sysmon_stats_query_hmx_utlization() - * API to query
+ * CDSP hmx utlization.On success, returns HMX utilization
+ * in the hmx_util parameter.
+ * @arg1: u32 pointer to HMX utilization in percentage.
+ * @return: SUCCESS (0) if Query is successful
+ *        FAILURE (Non-zero) if Query could not be processed, refer error codes.
+ */
+int sysmon_stats_query_hmx_utlization(u32 *hmx_util)
+{
+	u32 hmx_utilization = 0;
+	int ret = 0;
+
+	if (!g_sysmon_stats.smem_init_cdsp_v2)
+		sysmon_smem_init_cdsp();
+
+	if (!IS_ERR_OR_NULL(g_sysmon_stats.hmx_util)) {
+		hmx_utilization = sysmon_read_hmx_util();
+
+		if (hmx_utilization == HMX_HVX_PMU_EVENTS_NA) {
+			hmx_utilization = 0;
+			ret = DSP_PMU_COUNTER_NA;
+		}
+
+		memcpy(hmx_util, &hmx_utilization, sizeof(u32));
+	} else
+		return -ENOKEY;
+
+	return ret;
+}
+EXPORT_SYMBOL(sysmon_stats_query_hmx_utlization);
+/**
+ * sysmon_read_hvx_util() - Checks for CDSP power collapse
+ * and resets the HVX utilization to zero if dsp is power collapsed.
+ */
+static u32 sysmon_read_hvx_util(void)
+{
+	struct sysmon_smem_hvx_stats sysmon_hvx_util;
+	u64 curr_timestamp = __arch_counter_get_cntvct();
+	u64 last_hvx_update_at = 0;
+
+	memcpy(&sysmon_hvx_util,
+		g_sysmon_stats.hvx_util,
+		sizeof(struct sysmon_smem_hvx_stats));
+
+	last_hvx_update_at =
+		(u64) (((u64)sysmon_hvx_util.Last_update_time_load_msb << 32)|
+				sysmon_hvx_util.Last_update_time_load_lsb);
+
+	if ((curr_timestamp > last_hvx_update_at) &&
+		((curr_timestamp - last_hvx_update_at) / SYS_CLK_TICKS_PER_MS) > 100) {
+		sysmon_hvx_util.hvx_util_avg = 0;
+	}
+
+	if (sysmon_hvx_util.hvx_util_avg == HMX_HVX_PMU_EVENTS_NA)
+		pr_err("HVX PMU not registered, user ovveride pmu counter\n");
+
+	return sysmon_hvx_util.hvx_util_avg;
+}
+
+/**
+ * sysmon_stats_query_hvx_utlization() - * API to query
+ * CDSP subsystem hvx utlization.On success, returns HVX utilization
+ * in the hvx_util parameter.
+ * @arg1: u32 pointer to HVX utilization in percentage.
+ * @return: SUCCESS (0) if Query is successful
+ *        FAILURE (Non-zero) if Query could not be processed, refer error codes.
+ */
+int sysmon_stats_query_hvx_utlization(u32 *hvx_util)
+{
+	u32 hvx_utilization = 0;
+	int ret = 0;
+
+	if (!g_sysmon_stats.smem_init_cdsp_v2)
+		sysmon_smem_init_cdsp();
+
+	if (!IS_ERR_OR_NULL(g_sysmon_stats.hvx_util)) {
+		hvx_utilization = sysmon_read_hvx_util();
+
+		if (hvx_utilization == HMX_HVX_PMU_EVENTS_NA) {
+			hvx_utilization = 0;
+			ret = DSP_PMU_COUNTER_NA;
+		}
+
+		memcpy(hvx_util, &hvx_utilization, sizeof(u32));
+	} else
+		return -ENOKEY;
+
+	return ret;
+}
+EXPORT_SYMBOL(sysmon_stats_query_hvx_utlization);
 /**
  * sysmon_stats_query_power_residency() - * API to query requested
  * DSP subsystem power residency.On success, returns power residency
@@ -706,8 +899,9 @@ EXPORT_SYMBOL(sysmon_stats_query_sleep);
 
 static int master_adsp_stats_show(struct seq_file *s, void *d)
 {
-	int i = 0;
+	int i = 0, j = 0;
 	u64 accumulated;
+	u32 q6_load;
 
 	if (!g_sysmon_stats.smem_init_adsp)
 		sysmon_smem_init_adsp();
@@ -774,14 +968,37 @@ static int master_adsp_stats_show(struct seq_file *s, void *d)
 		seq_printf(s, "Accumulated Duration = %llu\n",
 			accumulated);
 	}
+
+	if (g_sysmon_stats.sysmon_power_stats_adsp) {
+		seq_puts(s, "\nPower Stats:\n\n");
+		for (j = 0; j < SYSMON_POWER_STATS_MAX_CLK_LEVELS; j++) {
+			if (g_sysmon_stats.sysmon_power_stats_adsp->clk_arr[j])
+				seq_printf(s, "%u: Core Clock = %u, Active Time = %u\n",
+				j, g_sysmon_stats.sysmon_power_stats_adsp->clk_arr[j],
+				g_sysmon_stats.sysmon_power_stats_adsp->active_time[j]);
+		}
+		seq_printf(s, "Power collapse time(sec) = %u\n",
+		g_sysmon_stats.sysmon_power_stats_adsp->pc_time);
+		seq_printf(s, "LPI time(sec) = %u\n",
+		g_sysmon_stats.sysmon_power_stats_adsp->lpi_time);
+	}
+
+	if (g_sysmon_stats.q6_avg_load_adsp) {
+		seq_puts(s, "\nQ6 load:\n\n");
+		q6_load = sysmon_read_q6_load(ADSP);
+		seq_printf(s, "Average Q6 load in KCPS = %u\n", q6_load);
+	}
+
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(master_adsp_stats);
 
 static int master_cdsp_stats_show(struct seq_file *s, void *d)
 {
-	int i = 0;
+	int i = 0, j = 0, ret = 0;
 	u64 accumulated;
+	u32 hmx_util, hvx_util;
+	u32 q6_load;
 
 	if (!g_sysmon_stats.smem_init_cdsp)
 		sysmon_smem_init_cdsp();
@@ -829,6 +1046,44 @@ static int master_cdsp_stats_show(struct seq_file *s, void *d)
 		seq_printf(s, "Last Exited At = %llu\n",
 			g_sysmon_stats.sleep_stats_cdsp->last_exited_at);
 		seq_printf(s, "Accumulated Duration = %llu\n", accumulated);
+	}
+
+	if (g_sysmon_stats.sysmon_power_stats_cdsp) {
+		seq_puts(s, "\nPower Stats:\n\n");
+		for (j = 0; j < SYSMON_POWER_STATS_MAX_CLK_LEVELS; j++) {
+			if (g_sysmon_stats.sysmon_power_stats_cdsp->clk_arr[j])
+				seq_printf(s, "%u: Core Clock = %u, Active Time = %u\n",
+				j, g_sysmon_stats.sysmon_power_stats_cdsp->clk_arr[j],
+				 g_sysmon_stats.sysmon_power_stats_cdsp->active_time[j]);
+		}
+		seq_printf(s, "Power collapse time(sec) = %u\n",
+		g_sysmon_stats.sysmon_power_stats_cdsp->pc_time);
+		seq_printf(s, "LPI time(sec) = %u\n",
+		g_sysmon_stats.sysmon_power_stats_cdsp->lpi_time);
+	}
+
+	if (g_sysmon_stats.q6_avg_load_cdsp) {
+		seq_puts(s, "\nQ6 load:\n\n");
+		q6_load = sysmon_read_q6_load(CDSP);
+		seq_printf(s, "Average Q6 load in KCPS = %u\n", q6_load);
+	}
+
+	ret = sysmon_stats_query_hmx_utlization(&hmx_util);
+
+	if (ret) {
+		seq_printf(s, "\nHMX stats not available, error code: %d\n", ret);
+	} else {
+		seq_puts(s, "\nHMX stats:\n\n");
+		seq_printf(s, "HMX utilization in percentage = %u\n", hmx_util);
+	}
+
+	ret = sysmon_stats_query_hvx_utlization(&hvx_util);
+
+	if (ret) {
+		seq_printf(s, "\nHVX stats not available, error code: %d\n", ret);
+	} else {
+		seq_puts(s, "\nHVX Stats:\n\n");
+		seq_printf(s, "HVX utilization in percentage = %u\n", hvx_util);
 	}
 
 	return 0;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2012, 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Description: CoreSight Trace Memory Controller driver
  */
@@ -65,6 +66,11 @@ void tmc_flush_and_stop(struct tmc_drvdata *drvdata)
 	}
 
 	tmc_wait_for_tmcready(drvdata);
+}
+
+void tmc_disable_stop_on_flush(struct tmc_drvdata *drvdata)
+{
+	drvdata->stop_on_flush = false;
 }
 
 void tmc_enable_hw(struct tmc_drvdata *drvdata)
@@ -425,16 +431,93 @@ static ssize_t out_mode_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(out_mode);
 
+static ssize_t stop_on_flush_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	u32 val;
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	if (drvdata->stop_on_flush)
+		val = 1;
+	else
+		val = 0;
+
+	return scnprintf(buf, PAGE_SIZE, "%x\n", val);
+}
+
+static ssize_t stop_on_flush_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t size)
+{
+	unsigned long val;
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	if ((kstrtoul(buf, 0, &val)) || (val & ~1UL))
+		return -EINVAL;
+
+	if (val)
+		drvdata->stop_on_flush = true;
+	else
+		drvdata->stop_on_flush = false;
+
+	return size;
+}
+static DEVICE_ATTR_RW(stop_on_flush);
+
+static ssize_t pcie_path_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	if (!drvdata->pcie_data)
+		return -EPERM;
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+			str_tmc_pcie_path[drvdata->pcie_data->pcie_path]);
+}
+
+static ssize_t pcie_path_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t size)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	char str[10] = "";
+
+	if (!drvdata->pcie_data)
+		return -EPERM;
+
+	if (strlen(buf) >= 10)
+		return -EINVAL;
+	if (sscanf(buf, "%s", str) != 1)
+		return -EINVAL;
+
+	mutex_lock(&drvdata->mem_lock);
+
+	if (!strcmp(str, str_tmc_pcie_path[TMC_PCIE_SW_PATH]))
+		drvdata->pcie_data->pcie_path = TMC_PCIE_SW_PATH;
+	else if (!strcmp(str, str_tmc_pcie_path[TMC_PCIE_HW_PATH]))
+		drvdata->pcie_data->pcie_path = TMC_PCIE_HW_PATH;
+	else
+		size = -EINVAL;
+
+	mutex_unlock(&drvdata->mem_lock);
+	return size;
+}
+static DEVICE_ATTR_RW(pcie_path);
+
 static struct attribute *coresight_tmc_etr_attrs[] = {
 	&dev_attr_trigger_cntr.attr,
 	&dev_attr_buffer_size.attr,
 	&dev_attr_block_size.attr,
 	&dev_attr_out_mode.attr,
+	&dev_attr_stop_on_flush.attr,
+	&dev_attr_pcie_path.attr,
 	NULL,
 };
 
 static struct attribute *coresight_tmc_etf_attrs[] = {
 	&dev_attr_trigger_cntr.attr,
+	&dev_attr_stop_on_flush.attr,
 	NULL,
 };
 
@@ -467,6 +550,11 @@ static const struct attribute_group *coresight_tmc_etf_groups[] = {
 static inline bool tmc_etr_can_use_sg(struct device *dev)
 {
 	return fwnode_property_present(dev->fwnode, "arm,scatter-gather");
+}
+
+static bool tmc_etr_support_mem_mode(struct device *dev)
+{
+	return fwnode_property_present(dev->fwnode, "qcom,mem_support");
 }
 
 static inline bool tmc_etr_has_non_secure_access(struct tmc_drvdata *drvdata)
@@ -582,7 +670,6 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 	drvdata->pid = -1;
 
 	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
-		drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
 		drvdata->size = tmc_etr_get_default_buffer_size(dev);
 		drvdata->max_burst_size = tmc_etr_get_max_burst_size(dev);
 	} else {
@@ -601,6 +688,7 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 	}
 
 	desc.dev = dev;
+	drvdata->stop_on_flush = false;
 
 	switch (drvdata->config_type) {
 	case TMC_CONFIG_TYPE_ETB:
@@ -630,9 +718,27 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 
 		drvdata->byte_cntr = byte_cntr_init(adev, drvdata);
 
+		if (tmc_etr_support_mem_mode(dev))
+			drvdata->mode_support |= BIT(TMC_ETR_OUT_MODE_MEM);
+
 		ret = tmc_etr_usb_init(adev, drvdata);
 		if (ret)
 			goto out;
+
+		ret = tmc_etr_eth_init(adev, drvdata);
+		if (ret)
+			goto out;
+
+		tmc_pcie_init(adev, drvdata);
+
+		if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_MEM))
+			drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
+		else if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_USB))
+			drvdata->out_mode = TMC_ETR_OUT_MODE_USB;
+		else if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_ETH))
+			drvdata->out_mode = TMC_ETR_OUT_MODE_ETH;
+		else
+			drvdata->out_mode = TMC_ETR_OUT_MODE_NONE;
 
 		break;
 	case TMC_CONFIG_TYPE_ETF:
@@ -695,7 +801,7 @@ static void tmc_shutdown(struct amba_device *adev)
 		(drvdata->out_mode == TMC_ETR_OUT_MODE_MEM ||
 		 (drvdata->out_mode == TMC_ETR_OUT_MODE_USB &&
 		  drvdata->usb_data->usb_mode == TMC_ETR_USB_SW)))
-		tmc_etr_disable_hw(drvdata);
+		tmc_etr_disable_hw(drvdata, true);
 
 	/*
 	 * We do not care about coresight unregister here unlike remove

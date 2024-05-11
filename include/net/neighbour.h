@@ -28,6 +28,7 @@
 #include <linux/err.h>
 #include <linux/sysctl.h>
 #include <linux/workqueue.h>
+#include <linux/android_kabi.h>
 #include <net/rtnetlink.h>
 
 /*
@@ -83,6 +84,8 @@ struct neigh_parms {
 	int	reachable_time;
 	int	data[NEIGH_VAR_DATA_MAX];
 	DECLARE_BITMAP(data_state, NEIGH_VAR_DATA_MAX);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 static inline void neigh_var_set(struct neigh_parms *p, int index, int val)
@@ -157,6 +160,9 @@ struct neighbour {
 	struct list_head	gc_list;
 	struct rcu_head		rcu;
 	struct net_device	*dev;
+
+	ANDROID_KABI_RESERVE(1);
+
 	u8			primary_key[0];
 } __randomize_layout;
 
@@ -226,6 +232,8 @@ struct neigh_table {
 	struct neigh_statistics	__percpu *stats;
 	struct neigh_hash_table __rcu *nht;
 	struct pneigh_entry	**phash_buckets;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 enum {
@@ -259,11 +267,6 @@ static inline void *neighbour_priv(const struct neighbour *n)
 #define NEIGH_UPDATE_F_ADMIN			0x80000000
 
 extern const struct nla_policy nda_policy[];
-
-static inline bool neigh_key_eq16(const struct neighbour *n, const void *pkey)
-{
-	return *(const u16 *)n->primary_key == *(const u16 *)pkey;
-}
 
 static inline bool neigh_key_eq32(const struct neighbour *n, const void *pkey)
 {
@@ -314,8 +317,6 @@ void neigh_table_init(int index, struct neigh_table *tbl);
 int neigh_table_clear(int index, struct neigh_table *tbl);
 struct neighbour *neigh_lookup(struct neigh_table *tbl, const void *pkey,
 			       struct net_device *dev);
-struct neighbour *neigh_lookup_nodev(struct neigh_table *tbl, struct net *net,
-				     const void *pkey);
 struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 				 struct net_device *dev, bool want_ref);
 static inline struct neighbour *neigh_create(struct neigh_table *tbl,

@@ -23,6 +23,7 @@
 #include <linux/regmap.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/suspend.h>
 #include <linux/types.h>
 
 #define REG_SIZE_PER_LPG	0x100
@@ -62,14 +63,18 @@
 
 /* REG_LPG_PERPH_SUBTYPE */
 #define SUBTYPE_PWM			0x0b
+#define SUBTYPE_HI_RES_PWM		0x0c
 #define SUBTYPE_LPG_LITE		0x11
 
 /* REG_LPG_PWM_SIZE_CLK */
 #define LPG_PWM_SIZE_LPG_MASK		BIT(4)
 #define LPG_PWM_SIZE_PWM_MASK		BIT(2)
+#define LPG_PWM_SIZE_PWM_HI_RES_MASK	GENMASK(6, 4)
 #define LPG_PWM_SIZE_LPG_SHIFT		4
 #define LPG_PWM_SIZE_PWM_SHIFT		2
+#define LPG_PWM_SIZE_PWM_HI_RES_SHIFT	4
 #define LPG_PWM_CLK_FREQ_SEL_MASK	GENMASK(1, 0)
+#define LPG_PWM_HI_RES_CLK_FREQ_SEL_MASK	GENMASK(2, 0)
 
 /* REG_LPG_PWM_FREQ_PREDIV_CLK */
 #define LPG_PWM_FREQ_PREDIV_MASK	GENMASK(6, 5)
@@ -84,6 +89,7 @@
 
 /* REG_LPG_PWM_VALUE_MSB */
 #define LPG_PWM_VALUE_MSB_MASK		BIT(0)
+#define LPG_PWM_HI_RES_VALUE_MSB_MASK	GENMASK(7, 0)
 
 /* REG_LPG_ENABLE_CONTROL */
 #define LPG_EN_LPG_OUT_BIT		BIT(7)
@@ -97,7 +103,9 @@
 #define LPG_PWM_VALUE_SYNC		BIT(0)
 
 #define NUM_PWM_SIZE			2
+#define NUM_PWM_HI_RES_SIZE		8
 #define NUM_PWM_CLK			3
+#define NUM_PWM_HI_RES_CLK		4
 #define NUM_CLK_PREDIV			4
 #define NUM_PWM_EXP			8
 
@@ -147,9 +155,12 @@ enum ppg_num_nvmems {
 };
 
 static const int pwm_size[NUM_PWM_SIZE] = {6, 9};
+static const int pwm_hi_res_size[NUM_PWM_HI_RES_SIZE] = {8, 9, 10, 11, 12, 13, 14, 15};
 static const int clk_freq_hz[NUM_PWM_CLK] = {1024, 32768, 19200000};
+static const int clk_freq_hz_hi_res[NUM_PWM_HI_RES_CLK] = {1024, 32768, 19200000, 76800000};
 /* clk_period_ns = NSEC_PER_SEC / clk_freq_hz */
 static const int clk_period_ns[NUM_PWM_CLK] = {976562, 30517, 52};
+static const int clk_period_ns_hi_res[NUM_PWM_HI_RES_CLK] = {976562, 30517, 52, 13};
 static const int clk_prediv[NUM_CLK_PREDIV] = {1, 3, 5, 6};
 static const int pwm_exponent[NUM_PWM_EXP] = {0, 1, 2, 3, 4, 5, 6, 7};
 
@@ -428,10 +439,18 @@ static int qpnp_lpg_set_pwm_config(struct qpnp_lpg_channel *lpg)
 	u8 val, mask, shift;
 	int pwm_size_idx, pwm_clk_idx, prediv_idx, clk_exp_idx;
 
-	pwm_size_idx = __find_index_in_array(lpg->pwm_config.pwm_size,
-			pwm_size, ARRAY_SIZE(pwm_size));
-	pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
-			clk_freq_hz, ARRAY_SIZE(clk_freq_hz));
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM) {
+		pwm_size_idx = __find_index_in_array(lpg->pwm_config.pwm_size,
+				pwm_hi_res_size, ARRAY_SIZE(pwm_hi_res_size));
+		pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
+				clk_freq_hz_hi_res, ARRAY_SIZE(clk_freq_hz_hi_res));
+	} else {
+		pwm_size_idx = __find_index_in_array(lpg->pwm_config.pwm_size,
+				pwm_size, ARRAY_SIZE(pwm_size));
+		pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
+				clk_freq_hz, ARRAY_SIZE(clk_freq_hz));
+	}
+
 	prediv_idx = __find_index_in_array(lpg->pwm_config.prediv,
 			clk_prediv, ARRAY_SIZE(clk_prediv));
 	clk_exp_idx = __find_index_in_array(lpg->pwm_config.clk_exp,
@@ -445,14 +464,16 @@ static int qpnp_lpg_set_pwm_config(struct qpnp_lpg_channel *lpg)
 	pwm_clk_idx += 1;
 	if (lpg->subtype == SUBTYPE_PWM) {
 		shift = LPG_PWM_SIZE_PWM_SHIFT;
-		mask = LPG_PWM_SIZE_PWM_MASK;
+		mask = LPG_PWM_SIZE_PWM_MASK | LPG_PWM_CLK_FREQ_SEL_MASK;
+	} else if (lpg->subtype == SUBTYPE_HI_RES_PWM) {
+		shift = LPG_PWM_SIZE_PWM_HI_RES_SHIFT;
+		mask = LPG_PWM_SIZE_PWM_HI_RES_MASK | LPG_PWM_HI_RES_CLK_FREQ_SEL_MASK;
 	} else {
 		shift = LPG_PWM_SIZE_LPG_SHIFT;
-		mask = LPG_PWM_SIZE_LPG_MASK;
+		mask = LPG_PWM_SIZE_LPG_MASK | LPG_PWM_CLK_FREQ_SEL_MASK;
 	}
 
 	val = pwm_size_idx << shift | pwm_clk_idx;
-	mask |= LPG_PWM_CLK_FREQ_SEL_MASK;
 	rc = qpnp_lpg_masked_write(lpg, REG_LPG_PWM_SIZE_CLK, mask, val);
 	if (rc < 0) {
 		dev_err(lpg->chip->dev, "Write LPG_PWM_SIZE_CLK failed, rc=%d\n",
@@ -473,7 +494,10 @@ static int qpnp_lpg_set_pwm_config(struct qpnp_lpg_channel *lpg)
 		return 0;
 
 	val = lpg->pwm_config.pwm_value >> 8;
-	mask = LPG_PWM_VALUE_MSB_MASK;
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM)
+		mask = LPG_PWM_HI_RES_VALUE_MSB_MASK;
+	else
+		mask = LPG_PWM_VALUE_MSB_MASK;
 	rc = qpnp_lpg_masked_write(lpg, REG_LPG_PWM_VALUE_MSB, mask, val);
 	if (rc < 0) {
 		dev_err(lpg->chip->dev, "Write LPG_PWM_VALUE_MSB failed, rc=%d\n",
@@ -506,8 +530,13 @@ static int qpnp_lpg_set_pfm_config(struct qpnp_lpg_channel *lpg)
 	u8 val, mask;
 	int pwm_clk_idx, clk_exp_idx;
 
-	pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
-			clk_freq_hz, ARRAY_SIZE(clk_freq_hz));
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM)
+		pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
+				clk_freq_hz_hi_res, ARRAY_SIZE(clk_freq_hz_hi_res));
+	else
+		pwm_clk_idx = __find_index_in_array(lpg->pwm_config.pwm_clk,
+				clk_freq_hz, ARRAY_SIZE(clk_freq_hz));
+
 	clk_exp_idx = __find_index_in_array(lpg->pwm_config.clk_exp,
 			pwm_exponent, ARRAY_SIZE(pwm_exponent));
 
@@ -518,7 +547,11 @@ static int qpnp_lpg_set_pfm_config(struct qpnp_lpg_channel *lpg)
 	pwm_clk_idx += 1;
 
 	val = pwm_clk_idx;
-	mask = LPG_PWM_CLK_FREQ_SEL_MASK;
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM)
+		mask = LPG_PWM_HI_RES_CLK_FREQ_SEL_MASK;
+	else
+		mask = LPG_PWM_CLK_FREQ_SEL_MASK;
+
 	rc = qpnp_lpg_masked_write(lpg, REG_LPG_PWM_SIZE_CLK, mask, val);
 	if (rc < 0) {
 		dev_err(lpg->chip->dev, "Write LPG_PWM_SIZE_CLK failed, rc=%d\n",
@@ -837,13 +870,14 @@ static int __qpnp_lpg_calc_pwm_period(u64 period_ns,
 {
 	struct qpnp_lpg_channel *lpg = container_of(pwm_config,
 			struct qpnp_lpg_channel, pwm_config);
-	struct lpg_pwm_config configs[NUM_PWM_SIZE];
+	struct lpg_pwm_config configs[NUM_PWM_HI_RES_SIZE];
 	int i, j, m, n;
 	u64 tmp1, tmp2;
 	u64 clk_period_ns = 0, pwm_clk_period_ns;
 	u64 clk_delta_ns = U64_MAX, min_clk_delta_ns = U64_MAX;
 	u64 pwm_period_delta = U64_MAX, min_pwm_period_delta = U64_MAX;
-	int pwm_size_step;
+	int pwm_size_step, clk_len, pwm_size_len;
+	const int *pwm_size_arr, *clk_freq_hz_arr;
 
 	/*
 	 *              (2^pwm_size) * (2^pwm_exp) * prediv * NSEC_PER_SEC
@@ -852,20 +886,34 @@ static int __qpnp_lpg_calc_pwm_period(u64 period_ns,
 	 *
 	 * Searching the closest settings for the requested PWM period.
 	 */
-	if (lpg->chip->use_sdam)
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM) {
+		pwm_size_arr = pwm_hi_res_size;
+		pwm_size_len = NUM_PWM_HI_RES_SIZE;
+		clk_freq_hz_arr = clk_freq_hz_hi_res;
+		clk_len = NUM_PWM_HI_RES_CLK;
+	} else {
+		pwm_size_arr = pwm_size;
+		pwm_size_len = NUM_PWM_SIZE;
+		clk_freq_hz_arr = clk_freq_hz;
+		clk_len = NUM_PWM_CLK;
+	}
+
+	if (lpg->chip->use_sdam) {
 		/* SDAM pattern control can only use 9 bit resolution */
 		n = 1;
+		pwm_size_len = 2;
+	}
 	else
 		n = 0;
-	for (; n < ARRAY_SIZE(pwm_size); n++) {
-		pwm_clk_period_ns = period_ns >> pwm_size[n];
-		for (i = ARRAY_SIZE(clk_freq_hz) - 1; i >= 0; i--) {
-			for (j = 0; j < ARRAY_SIZE(clk_prediv); j++) {
+	for (; n < pwm_size_len; n++) {
+		pwm_clk_period_ns = period_ns >> pwm_size_arr[n];
+		for (i = clk_len - 1; i >= 0; i--) {
+			for (j = 0; j < clk_len; j++) {
 				for (m = 0; m < ARRAY_SIZE(pwm_exponent); m++) {
 					tmp1 = 1 << pwm_exponent[m];
 					tmp1 *= clk_prediv[j];
 					tmp2 = NSEC_PER_SEC;
-					do_div(tmp2, clk_freq_hz[i]);
+					do_div(tmp2, clk_freq_hz_arr[i]);
 
 					clk_period_ns = tmp1 * tmp2;
 
@@ -879,13 +927,13 @@ static int __qpnp_lpg_calc_pwm_period(u64 period_ns,
 						min_clk_delta_ns
 							= clk_delta_ns;
 						configs[n].pwm_clk
-							= clk_freq_hz[i];
+							= clk_freq_hz_arr[i];
 						configs[n].prediv
 							= clk_prediv[j];
 						configs[n].clk_exp
 							= pwm_exponent[m];
 						configs[n].pwm_size
-							= pwm_size[n];
+							= pwm_size_arr[n];
 						configs[n].best_period_ns
 							= clk_period_ns;
 					}
@@ -893,9 +941,9 @@ static int __qpnp_lpg_calc_pwm_period(u64 period_ns,
 			}
 		}
 
-		configs[n].best_period_ns *= 1 << pwm_size[n];
+		configs[n].best_period_ns *= 1 << pwm_size_arr[n];
 		/* Find the closest setting for PWM period */
-		pwm_period_delta = min_clk_delta_ns << pwm_size[n];
+		pwm_period_delta = min_clk_delta_ns << pwm_size_arr[n];
 		if (pwm_period_delta < min_pwm_period_delta) {
 			min_pwm_period_delta = pwm_period_delta;
 			memcpy(pwm_config, &configs[n],
@@ -904,12 +952,12 @@ static int __qpnp_lpg_calc_pwm_period(u64 period_ns,
 	}
 
 	/* Larger PWM size can achieve better resolution for PWM duty */
-	for (n = ARRAY_SIZE(pwm_size) - 1; n > 0; n--) {
-		if (pwm_config->pwm_size >= pwm_size[n])
+	for (n = pwm_size_len - 1; n > 0; n--) {
+		if (pwm_config->pwm_size >= pwm_size_arr[n])
 			break;
-		pwm_size_step = pwm_size[n] - pwm_config->pwm_size;
+		pwm_size_step = pwm_size_arr[n] - pwm_config->pwm_size;
 		if (pwm_config->clk_exp >= pwm_size_step) {
-			pwm_config->pwm_size = pwm_size[n];
+			pwm_config->pwm_size = pwm_size_arr[n];
 			pwm_config->clk_exp -= pwm_size_step;
 		}
 	}
@@ -939,10 +987,13 @@ static void __qpnp_lpg_calc_pwm_duty(u64 period_ns, u64 duty_ns,
 static int __qpnp_lpg_calc_pfm_period(u64 period_ns,
 				       struct lpg_pwm_config *pwm_config)
 {
-	int clk, exp, lsb;
+	struct qpnp_lpg_channel *lpg = container_of(pwm_config,
+			struct qpnp_lpg_channel, pwm_config);
+	int clk, exp, lsb, clk_len;
 	int best_clk = 0, best_exp = 0, best_lsb = -EINVAL;
 	u64 lsb_tmp, period_tmp, curr_p_err, last_p_err = 0;
 	u64 min_p_err = U64_MAX;
+	const int *clk_freq_hz_arr, *clk_period_ns_arr;
 
 	/*
 	 *               2 * (pwm_value_lsb + 1) * (2^pwm_exp) * NSEC_PER_SEC
@@ -954,16 +1005,27 @@ static int __qpnp_lpg_calc_pfm_period(u64 period_ns,
 	 * period. Store the triplet values that yield the closest value to
 	 * desired period.
 	 */
-	for (clk = 0; clk < NUM_PWM_CLK; clk++) {
+
+	if (lpg->subtype == SUBTYPE_HI_RES_PWM) {
+		clk_freq_hz_arr = clk_freq_hz_hi_res;
+		clk_period_ns_arr = clk_period_ns_hi_res;
+		clk_len = NUM_PWM_HI_RES_CLK;
+	} else {
+		clk_freq_hz_arr = clk_freq_hz;
+		clk_period_ns_arr = clk_period_ns;
+		clk_len = NUM_PWM_CLK;
+	}
+
+	for (clk = 0; clk < clk_len; clk++) {
 		last_p_err = U64_MAX;
 		for (exp = 0; exp < NUM_PWM_EXP; exp++) {
-			lsb_tmp = div_u64(period_ns, clk_period_ns[clk]);
+			lsb_tmp = div_u64(period_ns, clk_period_ns_arr[clk]);
 			lsb_tmp >>= (exp + 1);
 			lsb = lsb_tmp - 1;
 			if (lsb >= 0 && lsb <= U8_MAX) {
 				period_tmp = (lsb + 1);
 				period_tmp <<= (exp + 1);
-				period_tmp *= clk_period_ns[clk];
+				period_tmp *= clk_period_ns_arr[clk];
 				curr_p_err = abs(period_ns - period_tmp);
 
 				if (curr_p_err < min_p_err) {
@@ -994,7 +1056,7 @@ static int __qpnp_lpg_calc_pfm_period(u64 period_ns,
 		return -EINVAL;
 	}
 
-	pwm_config->pwm_clk = clk_freq_hz[best_clk];
+	pwm_config->pwm_clk = clk_freq_hz_arr[best_clk];
 	pwm_config->clk_exp = pwm_exponent[best_exp];
 	pwm_config->pwm_value = best_lsb;
 
@@ -1794,7 +1856,8 @@ static int qpnp_lpg_parse_pfm_support(struct qpnp_lpg_chip *chip)
 
 		chan_idx--; /* zero-based indexing */
 
-		if (chip->lpgs[chan_idx].subtype == SUBTYPE_PWM) {
+		if (chip->lpgs[chan_idx].subtype == SUBTYPE_PWM ||
+			chip->lpgs[chan_idx].subtype == SUBTYPE_HI_RES_PWM) {
 			rc = qpnp_lpg_read(&chip->lpgs[chan_idx],
 					   REG_PWM_STATUS1, &val);
 			if (rc < 0) {
@@ -2016,6 +2079,78 @@ static int qpnp_lpg_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int pwm_restore(struct device *dev)
+{
+	struct qpnp_lpg_chip *chip = dev_get_drvdata(dev);
+	struct qpnp_lpg_channel *lpg;
+	struct pwm_device *pwm = chip->pwm_chip.pwms;
+	int rc = 0, i;
+
+	pr_debug("Restoring from hibernation via pwm restore\n");
+	rc = qpnp_lpg_pwm_apply(&chip->pwm_chip, pwm,
+				&pwm->state);
+	if (rc < 0)
+		return rc;
+
+	rc = qpnp_lpg_sdam_hw_init(chip);
+	if (rc < 0) {
+		dev_err(chip->dev, "SDAM HW init failed, rc=%d\n",
+				rc);
+		return rc;
+	}
+
+	for (i = 0; i < chip->num_lpgs; i++) {
+		lpg = &chip->lpgs[i];
+		lpg->output_type = PWM_OUTPUT_FIXED;
+		if (lpg->enable_pfm) {
+			rc = qpnp_lpg_write(lpg, REG_PWM_FM_MODE,
+					FM_MODE_ENABLE);
+			if (rc < 0) {
+				dev_err(chip->dev, "Write fm_mode_enable failed, rc=%d\n",
+					rc);
+				return rc;
+			}
+		}
+	}
+
+	return 0;
+
+}
+static int pwm_freeze(struct device *dev)
+{
+	pr_debug("Entering hibernation via pwm freeze\n");
+	return 0;
+}
+
+static int pwm_suspend(struct device *dev)
+{
+#ifdef CONFIG_DEEPSLEEP
+	if (pm_suspend_via_firmware()) {
+		pr_debug("Entering Deepsleep via pwm suspend\n");
+		return pwm_freeze(dev);
+	}
+#endif
+	return 0;
+}
+
+static int pwm_resume(struct device *dev)
+{
+#ifdef CONFIG_DEEPSLEEP
+	if (pm_suspend_via_firmware()) {
+		pr_debug("Resuming from Deepsleep via pwm resume\n");
+		return pwm_restore(dev);
+	}
+#endif
+	return 0;
+}
+
+static const struct dev_pm_ops pwm_pm_ops = {
+	.freeze	= pwm_freeze,
+	.restore	= pwm_restore,
+	.suspend	= pwm_suspend,
+	.resume	= pwm_resume,
+};
+
 static const struct of_device_id qpnp_lpg_of_match[] = {
 	{ .compatible = "qcom,pwm-lpg",},
 	{ },
@@ -2025,6 +2160,7 @@ static struct platform_driver qpnp_lpg_driver = {
 	.driver		= {
 		.name		= "qcom,pwm-lpg",
 		.of_match_table	= qpnp_lpg_of_match,
+		.pm		= &pwm_pm_ops,
 	},
 	.probe		= qpnp_lpg_probe,
 	.remove		= qpnp_lpg_remove,

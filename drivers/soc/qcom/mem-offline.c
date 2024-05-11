@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/memory.h>
@@ -20,7 +21,26 @@
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
 #include <soc/qcom/rpm-smd.h>
+#include <linux/migrate.h>
+#include <linux/swap.h>
+#include <linux/mm_inline.h>
+#include <linux/compaction.h>
+#include <linux/debugfs.h>
 
+struct movable_zone_fill_control {
+	struct list_head freepages;
+	unsigned long start_pfn;
+	unsigned long end_pfn;
+	unsigned long nr_migrate_pages;
+	unsigned long nr_free_pages;
+	unsigned long limit;
+	int target;
+	struct zone *zone;
+};
+
+static void fill_movable_zone_fn(struct work_struct *work);
+static DECLARE_WORK(fill_movable_zone_work, fill_movable_zone_fn);
+static DEFINE_MUTEX(page_migrate_lock);
 #define RPM_DDR_REQ 0x726464
 #define AOP_MSG_ADDR_MASK		0xffffffff
 #define AOP_MSG_ADDR_HIGH_SHIFT		32
@@ -37,13 +57,18 @@ MODULE_PARM_DESC(bypass_send_msg,
 static unsigned long start_section_nr, end_section_nr;
 static struct kobject *kobj;
 static unsigned int sections_per_block;
+static atomic_t target_migrate_pages = ATOMIC_INIT(0);
 static u32 offline_granule;
 static bool is_rpm_controller;
 static DECLARE_BITMAP(movable_bitmap, 1024);
+static bool has_pend_offline_req;
+static struct workqueue_struct *migrate_wq;
 #define MODULE_CLASS_NAME	"mem-offline"
 #define MEMBLOCK_NAME		"memory%lu"
 #define SEGMENT_NAME		"segment%lu"
 #define BUF_LEN			100
+#define MIGRATE_TIMEOUT_SEC	20
+#define SYSFS_STAT_DDR_LIMIT	(SZ_2G)
 
 struct section_stat {
 	unsigned long success_count;
@@ -96,6 +121,8 @@ static struct segment_info *segment_infos;
 
 static struct ddr_region *ddr_regions;
 
+static bool ddr_old_version;
+
 static int differing_segment_sizes;
 
 static int num_ddr_regions, num_segments;
@@ -130,6 +157,9 @@ struct memory_refresh_request {
 };
 
 static struct section_stat *mem_info;
+
+static int nopasr;
+module_param_named(nopasr, nopasr, uint, 0644);
 
 static void record_stat(unsigned long sec, ktime_t delay, int mode)
 {
@@ -195,6 +225,7 @@ static int aop_send_msg(unsigned long addr, bool online)
 	struct qmp_pkt pkt;
 	char mbox_msg[MAX_LEN];
 	unsigned long addr_low, addr_high;
+	int ret;
 
 	addr_low = addr & AOP_MSG_ADDR_MASK;
 	addr_high = (addr >> AOP_MSG_ADDR_HIGH_SHIFT) & AOP_MSG_ADDR_MASK;
@@ -205,20 +236,21 @@ static int aop_send_msg(unsigned long addr, bool online)
 
 	pkt.size = MAX_LEN;
 	pkt.data = mbox_msg;
-	return (mbox_send_message(mailbox.mbox, &pkt) < 0);
+	ret = mbox_send_message(mailbox.mbox, &pkt);
+	return ret;
 }
 
-static long get_memblk_bits(unsigned int seg_idx, unsigned long memblk_addr)
+static long get_memblk_bits(int seg_idx, unsigned long memblk_addr)
 {
-	if (memblk_addr > segment_infos[seg_idx].start_addr +
-			segment_infos[seg_idx].seg_size)
+	if (seg_idx < 0 || (memblk_addr > segment_infos[seg_idx].start_addr +
+			segment_infos[seg_idx].seg_size))
 		return -EINVAL;
 
 	return (1 << ((memblk_addr - segment_infos[seg_idx].start_addr) /
 				memory_block_size_bytes()));
 }
 
-static long get_segment_addr_to_idx(unsigned long addr)
+static int get_segment_addr_to_idx(unsigned long addr)
 {
 	int i;
 
@@ -257,11 +289,11 @@ static int send_msg(struct memory_notify *mn, bool online, int count)
 		else
 			ret = aop_send_msg(__pfn_to_phys(start), online);
 
-		if (ret) {
-			pr_err("PASR: %s %s request addr:0x%llx failed\n",
+		if (ret < 0) {
+			pr_err("PASR: %s %s request addr:0x%llx failed, ret:%d\n",
 			       is_rpm_controller ? "RPM" : "AOP",
 			       online ? "online" : "offline",
-			       __pfn_to_phys(start));
+			       __pfn_to_phys(start), ret);
 			goto undo;
 		}
 
@@ -286,8 +318,9 @@ undo:
 		else
 			ret = aop_send_msg(__pfn_to_phys(start), !online);
 
-		if (ret)
-			panic("Failed to completely online/offline a hotpluggable segment. A quasi state of memblock can cause randomn system failures.");
+		if (ret < 0)
+			panic("Failed to completely online/offline a hotpluggable segment. A quasi state of memblock can cause randomn system failures. ret:%d",
+				ret);
 		segment_size = segment_infos[seg_idx].seg_size;
 		addr += segment_size;
 		seg_idx = get_segment_addr_to_idx(addr);
@@ -299,7 +332,7 @@ undo:
 
 static void set_memblk_bitmap_online(unsigned long addr)
 {
-	unsigned long seg_idx;
+	int seg_idx;
 	long cur_blk_bit;
 
 	seg_idx = get_segment_addr_to_idx(addr);
@@ -320,7 +353,7 @@ static void set_memblk_bitmap_online(unsigned long addr)
 
 static void set_memblk_bitmap_offline(unsigned long addr)
 {
-	unsigned long seg_idx;
+	int seg_idx;
 	long cur_blk_bit;
 
 	seg_idx = get_segment_addr_to_idx(addr);
@@ -486,7 +519,7 @@ static int mem_event_callback(struct notifier_block *self,
 	ktime_t delay = 0;
 	phys_addr_t start_addr, end_addr;
 	unsigned int idx = end_section_nr - start_section_nr + 1;
-	unsigned long seg_idx;
+	int seg_idx;
 
 	start = SECTION_ALIGN_DOWN(mn->start_pfn);
 	end = SECTION_ALIGN_UP(mn->start_pfn + mn->nr_pages);
@@ -523,7 +556,7 @@ static int mem_event_callback(struct notifier_block *self,
 
 		break;
 	case MEM_ONLINE:
-		delay = ktime_ms_delta(ktime_get(), cur);
+		delay = ktime_us_delta(ktime_get(), cur);
 		record_stat(sec_nr, delay, MEMORY_ONLINE);
 		cur = 0;
 		set_memblk_bitmap_online(start_addr);
@@ -539,6 +572,8 @@ static int mem_event_callback(struct notifier_block *self,
 				start_addr, end_addr);
 		++mem_info[(sec_nr - start_section_nr + MEMORY_OFFLINE *
 			   idx) / sections_per_block].fail_count;
+		has_pend_offline_req = true;
+		cancel_work_sync(&fill_movable_zone_work);
 		cur = ktime_get();
 		break;
 	case MEM_OFFLINE:
@@ -548,9 +583,10 @@ static int mem_event_callback(struct notifier_block *self,
 		 * help since this is the last stage of memory hotplug.
 		 */
 
-		delay = ktime_ms_delta(ktime_get(), cur);
+		delay = ktime_us_delta(ktime_get(), cur);
 		record_stat(sec_nr, delay, MEMORY_OFFLINE);
 		cur = 0;
+		has_pend_offline_req = false;
 		set_memblk_bitmap_offline(start_addr);
 		pr_info("mem-offline: Offlined memory block mem%pK\n",
 			(void *)sec_nr);
@@ -752,10 +788,19 @@ static ssize_t show_num_segments(struct kobject *kobj,
 	return scnprintf(buf, PAGE_SIZE, "%lu\n",
 			(unsigned long)num_segments);
 }
+#define MEM_OFFLINE_DEBUG(seq, buf, sz, fmt, ...)  ({		\
+	int ret = 0;						\
+	if (!seq)						\
+		ret = scnprintf(buf, sz, fmt, ##__VA_ARGS__);	\
+	else							\
+		seq_printf(seq, fmt, ##__VA_ARGS__);		\
+	ret;							\
+})
 
 static unsigned int print_blk_residency_percentage(char *buf, size_t sz,
 			unsigned int tot_blks, ktime_t *total_time,
-			enum memory_states mode)
+			enum memory_states mode,
+			struct seq_file *seq)
 {
 	unsigned int i;
 	unsigned int c = 0;
@@ -767,13 +812,15 @@ static unsigned int print_blk_residency_percentage(char *buf, size_t sz,
 			ktime_add(total_time[i + MEMORY_ONLINE * idx],
 					total_time[i + MEMORY_OFFLINE * idx]));
 
-		c += scnprintf(buf + c, sz - c, "%d%%\t\t", percent);
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "%d%%\t\t", percent);
 	}
 	return c;
 }
+
 static unsigned int print_blk_residency_times(char *buf, size_t sz,
 			unsigned int tot_blks, ktime_t *total_time,
-			enum memory_states mode)
+			enum memory_states mode,
+			struct seq_file *seq)
 {
 	unsigned int i;
 	unsigned int c = 0;
@@ -789,15 +836,16 @@ static unsigned int print_blk_residency_times(char *buf, size_t sz,
 			delta = 0;
 		delta = ktime_add(delta,
 			mem_info[i + mode * idx].resident_time);
-		c += scnprintf(buf + c, sz - c, "%lus\t\t",
-				ktime_to_ms(delta) / MSEC_PER_SEC);
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "%lus\t\t",
+				ktime_to_us(delta) / USEC_PER_SEC);
 		total_time[i + mode * idx] = delta;
 	}
 	return c;
 }
 
-static ssize_t show_mem_stats(struct kobject *kobj,
-				struct kobj_attribute *attr, char *buf)
+static ssize_t print_mem_stats(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf,
+				struct seq_file *seq)
 {
 
 	unsigned int blk_start = start_section_nr / sections_per_block;
@@ -817,83 +865,83 @@ static ssize_t show_mem_stats(struct kobject *kobj,
 		return -ENOMEM;
 
 	for (j = 0; j < MAX_STATE; j++) {
-		c += scnprintf(buf + c, sz - c,
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 			"\n\t%s\n\t\t\t", j == 0 ? "ONLINE" : "OFFLINE");
 		for (i = blk_start; i <= blk_end; i++)
-			c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"%s%d\t\t", "mem", i);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tLast recd time:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c, "%lums\t\t",
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "%luus\t\t",
 				mem_info[i + j * idx].last_recorded_time);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tAvg time:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c,
-				"%lums\t\t", mem_info[i + j * idx].avg_time);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
+				"%luus\t\t", mem_info[i + j * idx].avg_time);
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tBest time:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c,
-				"%lums\t\t", mem_info[i + j * idx].best_time);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
+				"%luus\t\t", mem_info[i + j * idx].best_time);
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tWorst time:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c,
-				"%lums\t\t", mem_info[i + j * idx].worst_time);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
+				"%luus\t\t", mem_info[i + j * idx].worst_time);
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tSuccess count:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 				"%lu\t\t", mem_info[i + j * idx].success_count);
-		c += scnprintf(buf + c, sz - c, "\n");
-		c += scnprintf(buf + c, sz - c,
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 							"\tFail count:\t");
 		for (i = 0; i <= tot_blks; i++)
-			c += scnprintf(buf + c, sz - c,
+			c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 				"%lu\t\t", mem_info[i + j * idx].fail_count);
-		c += scnprintf(buf + c, sz - c, "\n");
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
 	}
 
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\tState:\t\t");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\tState:\t\t");
 	for (i = 0; i <= tot_blks; i++) {
-		c += scnprintf(buf + c, sz - c, "%s\t\t",
+		c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "%s\t\t",
 			mem_sec_state[i] == MEMORY_ONLINE ?
 			"Online" : "Offline");
 	}
-	c += scnprintf(buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
 
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\tOnline time:\t");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\tOnline time:\t");
 	c += print_blk_residency_times(buf + c, sz - c,
-			tot_blks, total_time, MEMORY_ONLINE);
+			tot_blks, total_time, MEMORY_ONLINE, seq);
 
 
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\tOffline time:\t");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\tOffline time:\t");
 	c += print_blk_residency_times(buf + c, sz - c,
-			tot_blks, total_time, MEMORY_OFFLINE);
+			tot_blks, total_time, MEMORY_OFFLINE, seq);
 
-	c += scnprintf(buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
 
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\tOnline %%:\t");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\tOnline %%:\t");
 	c += print_blk_residency_percentage(buf + c, sz - c,
-			tot_blks, total_time, MEMORY_ONLINE);
+			tot_blks, total_time, MEMORY_ONLINE, seq);
 
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\tOffline %%:\t");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\tOffline %%:\t");
 	c += print_blk_residency_percentage(buf + c, sz - c,
-			tot_blks, total_time, MEMORY_OFFLINE);
-	c += scnprintf(buf + c, sz - c, "\n");
-	c += scnprintf(buf + c, sz - c, "\n");
+			tot_blks, total_time, MEMORY_OFFLINE, seq);
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
 
 	for (i = 0; i <= tot_blks; i++)
 		total = ktime_add(total,
@@ -906,27 +954,305 @@ static ssize_t show_mem_stats(struct kobject *kobj,
 
 	total_offline = ktime_sub(total, total_online);
 
-	c += scnprintf(buf + c, sz - c,
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 					"\tAvg Online %%:\t%d%%\n",
 					((int)total_online * 100) / total);
-	c += scnprintf(buf + c, sz - c,
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c,
 					"\tAvg Offline %%:\t%d%%\n",
 					((int)total_offline * 100) / total);
 
-	c += scnprintf(buf + c, sz - c, "\n");
+	c += MEM_OFFLINE_DEBUG(seq, buf + c, sz - c, "\n");
 	kfree(total_time);
 	return c;
 }
+static ssize_t sysfs_show_mem_stats(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	size_t stat_ddr_limit;
+
+	stat_ddr_limit = ((end_section_nr - start_section_nr) + 1) *
+				sections_per_block * memory_block_size_bytes();
+	if (stat_ddr_limit > SYSFS_STAT_DDR_LIMIT) {
+		pr_info("Try reading the stats through /sys/kernel/debug/mem_offline_stats\n");
+		return -EFBIG;
+	}
+
+	return print_mem_stats(kobj, attr, buf, NULL);
+}
+
+static ssize_t show_anon_migrate(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%lu\n",
+				atomic_read(&target_migrate_pages));
+}
+
+static ssize_t store_anon_migrate(struct kobject *kobj,
+				struct kobj_attribute *attr, const char *buf,
+				size_t size)
+{
+	int val = 0, ret;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+
+	atomic_add(val, &target_migrate_pages);
+
+	if (!work_pending(&fill_movable_zone_work))
+		queue_work(migrate_wq, &fill_movable_zone_work);
+
+	return size;
+}
+
+static unsigned long get_anon_movable_pages(
+			struct movable_zone_fill_control *fc,
+			unsigned long start_pfn,
+			unsigned long end_pfn, struct list_head *list)
+{
+	int found = 0, pfn, ret;
+	int limit = min_t(int, fc->target, (int)pageblock_nr_pages);
+
+	fc->nr_migrate_pages = 0;
+	for (pfn = start_pfn; pfn < end_pfn && found < limit; ++pfn) {
+		struct page *page = pfn_to_page(pfn);
+
+		if (!pfn_valid(pfn))
+			continue;
+
+		if (PageCompound(page)) {
+			struct page *head = compound_head(page);
+			int skip;
+
+			skip = (1 << compound_order(head)) - (page - head);
+			pfn += skip - 1;
+			continue;
+		}
+
+		if (PageBuddy(page)) {
+			unsigned long freepage_order;
+
+			freepage_order = READ_ONCE(page_private(page));
+			if (freepage_order > 0 && freepage_order < MAX_ORDER)
+				pfn += (1 << page_private(page)) - 1;
+			continue;
+		}
+
+		if (!(pfn % pageblock_nr_pages) &&
+			get_pageblock_migratetype(page) == MIGRATE_CMA) {
+			pfn += pageblock_nr_pages - 1;
+			continue;
+		}
+
+		ret = isolate_anon_lru_page(page);
+		if (ret)
+			continue;
+
+		list_add_tail(&page->lru, list);
+		inc_node_page_state(page, NR_ISOLATED_ANON +
+			page_is_file_lru(page));
+		found++;
+		++fc->nr_migrate_pages;
+	}
+
+	return pfn;
+}
+
+static void prepare_fc(struct movable_zone_fill_control *fc)
+{
+	struct zone *zone;
+
+	zone = &(NODE_DATA(0)->node_zones[ZONE_MOVABLE]);
+	fc->zone = zone;
+	fc->start_pfn = ALIGN(zone->zone_start_pfn, pageblock_nr_pages);
+	fc->end_pfn = zone_end_pfn(zone);
+	fc->limit = atomic64_read(&zone->managed_pages);
+	INIT_LIST_HEAD(&fc->freepages);
+}
+
+
+static void release_freepages(struct list_head *freelist)
+{
+	struct page *page, *next;
+
+	list_for_each_entry_safe(page, next, freelist, lru) {
+		list_del(&page->lru);
+		__free_page(page);
+	}
+}
+
+static void isolate_free_pages(struct movable_zone_fill_control *fc)
+{
+	struct page *page;
+	unsigned long flags;
+	unsigned long start_pfn = fc->start_pfn;
+	unsigned long end_pfn = fc->end_pfn;
+	LIST_HEAD(tmp);
+	struct zone *dst_zone;
+
+	if (!(start_pfn < end_pfn))
+		return;
+
+	dst_zone = page_zone(pfn_to_page(start_pfn));
+	if (zone_page_state(dst_zone, NR_FREE_PAGES) < high_wmark_pages(dst_zone))
+		return;
+
+	spin_lock_irqsave(&fc->zone->lock, flags);
+	for (; start_pfn < end_pfn; start_pfn++) {
+		unsigned long isolated;
+
+		if (!pfn_valid(start_pfn))
+			continue;
+
+		page = pfn_to_page(start_pfn);
+		if (!page)
+			continue;
+
+		if (PageCompound(page)) {
+			struct page *head = compound_head(page);
+			int skip;
+
+			skip = (1 << compound_order(head)) - (page - head);
+			start_pfn += skip - 1;
+			continue;
+		}
+
+		if (!(start_pfn % pageblock_nr_pages) &&
+			get_pageblock_migratetype(page) == MIGRATE_ISOLATE) {
+			start_pfn += pageblock_nr_pages - 1;
+			continue;
+		}
+		/*
+		 * Make sure that the zone->lock is not held for long by
+		 * returning once we have SWAP_CLUSTER_MAX pages in the
+		 * free list for migration.
+		 */
+		if (!(start_pfn % pageblock_nr_pages) &&
+			(fc->nr_free_pages >= SWAP_CLUSTER_MAX ||
+			 has_pend_offline_req))
+			break;
+
+		if (!PageBuddy(page))
+			continue;
+
+		INIT_LIST_HEAD(&tmp);
+		isolated = isolate_and_split_free_page(page, &tmp);
+		if (!isolated) {
+			fc->start_pfn = ALIGN(fc->start_pfn, pageblock_nr_pages);
+			goto out;
+		}
+
+		list_splice(&tmp, &fc->freepages);
+		fc->nr_free_pages += isolated;
+		start_pfn += isolated - 1;
+	}
+	fc->start_pfn = start_pfn;
+out:
+	spin_unlock_irqrestore(&fc->zone->lock, flags);
+}
+
+static struct page *movable_page_alloc(struct page *page, unsigned long data)
+{
+	struct movable_zone_fill_control *fc;
+	struct page *freepage;
+
+	fc = (struct movable_zone_fill_control *)data;
+	if (list_empty(&fc->freepages)) {
+		isolate_free_pages(fc);
+		if (list_empty(&fc->freepages))
+			return NULL;
+	}
+
+	freepage = list_entry(fc->freepages.next, struct page, lru);
+	list_del(&freepage->lru);
+	fc->nr_free_pages--;
+
+	return freepage;
+}
+
+static void movable_page_free(struct page *page, unsigned long data)
+{
+	struct movable_zone_fill_control *fc;
+
+	fc = (struct movable_zone_fill_control *)data;
+	list_add(&page->lru, &fc->freepages);
+	fc->nr_free_pages++;
+}
+
+
+static void fill_movable_zone_fn(struct work_struct *work)
+{
+	unsigned long start_pfn, end_pfn;
+	unsigned long movable_highmark;
+	struct zone *normal_zone = &(NODE_DATA(0)->node_zones[ZONE_NORMAL]);
+	struct zone *movable_zone = &(NODE_DATA(0)->node_zones[ZONE_MOVABLE]);
+	LIST_HEAD(source);
+	int ret, free;
+	struct movable_zone_fill_control fc = { {0} };
+	unsigned long timeout = MIGRATE_TIMEOUT_SEC * HZ, expire;
+
+	start_pfn = normal_zone->zone_start_pfn;
+	end_pfn = zone_end_pfn(normal_zone);
+	movable_highmark = high_wmark_pages(movable_zone);
+
+	if (has_pend_offline_req)
+		return;
+
+	if (!mutex_trylock(&page_migrate_lock))
+		return;
+	prepare_fc(&fc);
+	if (!fc.limit)
+		goto out;
+	expire = jiffies + timeout;
+restart:
+	fc.target = atomic_xchg(&target_migrate_pages, 0);
+	if (!fc.target)
+		goto out;
+repeat:
+	cond_resched();
+	if (time_after(jiffies, expire))
+		goto out;
+	free = zone_page_state(movable_zone, NR_FREE_PAGES);
+	if (free - fc.target <= movable_highmark)
+		fc.target = free - movable_highmark;
+	if (fc.target <= 0)
+		goto out;
+
+	start_pfn = get_anon_movable_pages(&fc, start_pfn, end_pfn, &source);
+	if (list_empty(&source) && start_pfn < end_pfn)
+		goto repeat;
+
+	ret = migrate_pages(&source, movable_page_alloc, movable_page_free,
+		(unsigned long) &fc, MIGRATE_ASYNC, MR_MEMORY_HOTPLUG, NULL);
+	if (ret)
+		putback_movable_pages(&source);
+
+	fc.target -= fc.nr_migrate_pages;
+	if (ret == -ENOMEM || start_pfn >= end_pfn || has_pend_offline_req)
+		goto out;
+	else if (fc.target <= 0)
+		goto restart;
+
+	goto repeat;
+out:
+	if (fc.nr_free_pages > 0)
+		release_freepages(&fc.freepages);
+	mutex_unlock(&page_migrate_lock);
+}
 
 static struct kobj_attribute stats_attr =
-		__ATTR(stats, 0444, show_mem_stats, NULL);
+		__ATTR(stats, 0444, sysfs_show_mem_stats, NULL);
 
 static struct kobj_attribute offline_granule_attr =
 		__ATTR(offline_granule, 0444, show_mem_offline_granule, NULL);
 
+static struct kobj_attribute anon_migration_size_attr =
+		__ATTR(anon_migrate, 0644, show_anon_migrate, store_anon_migrate);
+
 static struct attribute *mem_root_attrs[] = {
 		&stats_attr.attr,
 		&offline_granule_attr.attr,
+		&anon_migration_size_attr.attr,
 		NULL,
 };
 
@@ -1102,6 +1428,9 @@ static int mem_parse_dt(struct platform_device *pdev)
 		return PTR_ERR(mailbox.mbox);
 	}
 
+	if (of_find_property(node, "ddr-old-version", NULL))
+		ddr_old_version = true;
+
 	return 0;
 }
 
@@ -1154,8 +1483,8 @@ static int get_segment_region_info(void)
 {
 	uint8_t r = 0; // region index
 	unsigned long region_end, segment_start, segment_size, r0_segment_size;
-	unsigned long num_kernel_blks, seg_idx = 0, addr;
-	int i;
+	unsigned long num_kernel_blks, addr;
+	int i, seg_idx = 0;
 
 	num_segments = get_num_offlinable_segments();
 
@@ -1255,45 +1584,61 @@ static int get_ddr_regions_info(void)
 
 	num_ddr_regions = get_num_ddr_regions(node);
 
+	if (!num_ddr_regions) {
+		if (ddr_old_version)
+			num_ddr_regions = 1;
+		else {
+			pr_err("mem-offine: num_ddr_regions is %d\n", num_ddr_regions);
+			return -EINVAL;
+		}
+	}
+
 	ddr_regions = kcalloc(num_ddr_regions, sizeof(*ddr_regions), GFP_KERNEL);
 	if (!ddr_regions)
 		return -ENOMEM;
 
 	nr_address_cells = of_n_addr_cells(of_root);
 
-	for (i = 0; i < num_ddr_regions; i++) {
+	if (ddr_old_version) {
+		ddr_regions[0].start_address =  offlinable_region_start_addr;
+		ddr_regions[0].length = bootmem_dram_end_addr - ddr_regions[0].start_address;
+		ddr_regions[0].segments_start_offset = 0;
+		ddr_regions[0].segments_start_idx = 0;
+		ddr_regions[0].granule_size = offline_granule;
+	} else {
+		for (i = 0; i < num_ddr_regions; i++) {
 
-		snprintf(str, sizeof(str), "region%d", i);
-		prop = of_find_property(node, str, &len);
+			snprintf(str, sizeof(str), "region%d", i);
+			prop = of_find_property(node, str, &len);
+			if (!prop)
+				return -EINVAL;
 
-		if (!prop)
-			return -EINVAL;
+			num_cells = len / sizeof(__be32);
+			if (num_cells != DDR_REGIONS_NUM_CELLS)
+				return -EINVAL;
 
-		num_cells = len / sizeof(__be32);
-		if (num_cells != DDR_REGIONS_NUM_CELLS)
-			return -EINVAL;
+			pos = prop->value;
 
-		pos = prop->value;
+			val = of_read_number(pos, nr_address_cells);
+			pos += nr_address_cells;
+			ddr_regions[i].start_address = val;
 
-		val = of_read_number(pos, nr_address_cells);
-		pos += nr_address_cells;
-		ddr_regions[i].start_address = val;
+			val = of_read_number(pos, nr_address_cells);
+			pos += nr_address_cells;
+			ddr_regions[i].length = val;
 
-		val = of_read_number(pos, nr_address_cells);
-		pos += nr_address_cells;
-		ddr_regions[i].length = val;
+			val = of_read_number(pos, nr_address_cells);
+			pos += nr_address_cells;
+			ddr_regions[i].segments_start_offset = val;
 
-		val = of_read_number(pos, nr_address_cells);
-		pos += nr_address_cells;
-		ddr_regions[i].segments_start_offset = val;
+			val = of_read_number(pos, nr_address_cells);
+			pos += nr_address_cells;
+			ddr_regions[i].segments_start_idx = val;
 
-		val = of_read_number(pos, nr_address_cells);
-		pos += nr_address_cells;
-		ddr_regions[i].segments_start_idx = val;
-
-		val = of_read_number(pos, nr_address_cells);
-		pos += nr_address_cells;
-		ddr_regions[i].granule_size = val;
+			val = of_read_number(pos, nr_address_cells);
+			pos += nr_address_cells;
+			ddr_regions[i].granule_size = val;
+		}
 	}
 
 	for (i = 0; i < num_ddr_regions; i++) {
@@ -1413,11 +1758,23 @@ static int update_dram_end_address_and_movable_bitmap(phys_addr_t *bootmem_dram_
 	return 0;
 }
 
+static int mem_offline_stats_show(struct seq_file *seq, void *data)
+{
+	return print_mem_stats(NULL, NULL, NULL, seq);
+}
+
+DEFINE_SHOW_ATTRIBUTE(mem_offline_stats);
+
 static int mem_offline_driver_probe(struct platform_device *pdev)
 {
 	unsigned int total_blks;
 	int ret, i;
 	ktime_t now;
+
+	if (nopasr) {
+		pr_info("mem-offline: nopasr mode enabled. Skipping probe\n");
+		return 0;
+	}
 
 	ret = mem_parse_dt(pdev);
 	if (ret)
@@ -1487,6 +1844,15 @@ static int mem_offline_driver_probe(struct platform_device *pdev)
 	if (bypass_send_msg)
 		pr_info("mem-offline: bypass mode\n");
 
+	migrate_wq = alloc_workqueue("reverse_migrate_wq",
+			WQ_UNBOUND | WQ_FREEZABLE, 0);
+	if (!migrate_wq) {
+		pr_err("Failed to create the worker for reverse migration\n");
+		ret = -ENOMEM;
+		goto err_sysfs_remove_group;
+	}
+
+	debugfs_create_file("mem_offline_stats", 0444, NULL, NULL, &mem_offline_stats_fops);
 	return 0;
 
 err_sysfs_remove_group:

@@ -14,6 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/suspend.h>
 #include <soc/qcom/memory_dump.h>
 #include <soc/qcom/minidump.h>
 #include <dt-bindings/soc/qcom,dcc_v2.h>
@@ -149,6 +150,16 @@ struct dcc_config_entry {
 	struct list_head		list;
 };
 
+/*
+ * struct reg_state
+ * offset: the offset of the reg to be preserved when dcc is without power
+ * val   : the val of the reg to be preserved when dcc is without power
+ */
+struct reg_state {
+	uint32_t		offset;
+	uint32_t		val;
+};
+
 struct dcc_drvdata {
 	void __iomem		*base;
 	uint32_t		reg_size;
@@ -163,6 +174,8 @@ struct dcc_drvdata {
 	uint32_t		ram_cfg;
 	uint32_t		ram_start;
 	bool			*enable;
+	bool			*hw_trig;
+	bool			*sw_trig;
 	bool			*configured;
 	bool			interrupt_disable;
 	char			*sram_node;
@@ -174,6 +187,11 @@ struct dcc_drvdata {
 	uint8_t			curr_list;
 	uint8_t			*cti_trig;
 	uint8_t			loopoff;
+	uint32_t		ram_cpy_len;
+	uint32_t		per_ll_reg_cnt;
+	int32_t			ll_state_cnt;
+	struct reg_state	*ll_state;
+	void			*sram_state;
 	uint8_t			*qad_output;
 };
 
@@ -204,12 +222,31 @@ static int dcc_sram_writel(struct dcc_drvdata *drvdata,
 	return 0;
 }
 
+static int dcc_sram_memcpy(void *to, const void __iomem *from,
+							size_t count)
+{
+	if (!count || (!IS_ALIGNED((unsigned long)from, 4) ||
+			!IS_ALIGNED((unsigned long)to, 4) ||
+			!IS_ALIGNED((unsigned long)count, 4))) {
+		return -EINVAL;
+	}
+
+	while (count >= 4) {
+		*(unsigned int *)to = __raw_readl(from);
+		to += 4;
+		from += 4;
+		count -= 4;
+	}
+
+	return 0;
+}
+
 static bool dcc_ready(struct dcc_drvdata *drvdata)
 {
 	uint32_t val;
 
 	/* poll until DCC ready */
-	if (!readl_poll_timeout((drvdata->base + DCC_STATUS), val,
+	if (!readl_poll_timeout((drvdata->base + dcc_offset_conv(drvdata, DCC_STATUS)), val,
 				(BMVAL(val, 0, 1) == 0), 1, TIMEOUT_US))
 		return true;
 
@@ -262,8 +299,9 @@ static int dcc_sw_trigger(struct dcc_drvdata *drvdata)
 	mutex_lock(&drvdata->mutex);
 
 	for (curr_list = 0; curr_list < drvdata->nr_link_list; curr_list++) {
-		if (!drvdata->enable[curr_list])
+		if ((!drvdata->enable[curr_list]) || (!drvdata->sw_trig[curr_list]))
 			continue;
+		dev_info(drvdata->dev, "DCC SW trigger link list %d\n", curr_list);
 		ll_cfg = dcc_readl(drvdata, DCC_LL_CFG(curr_list));
 		if (drvdata->mem_map_ver == DCC_MEM_MAP_VER3)
 			tmp_ll_cfg = ll_cfg & ~BIT(8);
@@ -629,7 +667,7 @@ static int dcc_valid_list(struct dcc_drvdata *drvdata, int curr_list)
 		return -EINVAL;
 	}
 
-	dev_err(drvdata->dev, "DCC list passed %d\n", curr_list);
+	dev_info(drvdata->dev, "DCC list passed %d\n", curr_list);
 	return 0;
 }
 
@@ -723,15 +761,27 @@ static int dcc_enable(struct dcc_drvdata *drvdata)
 		if (drvdata->mem_map_ver == DCC_MEM_MAP_VER3) {
 			dcc_writel(drvdata, drvdata->qad_output[list],
 					DCC_QAD_OUTPUT(list));
-			dcc_writel(drvdata, BIT(8) | ((drvdata->data_sink[list] << 4) |
-				   (drvdata->func_type[list])), DCC_LL_CFG(list));
+			dcc_writel(drvdata, drvdata->cti_trig[list],
+					DCC_CTI_TRIG(list));
+			if (drvdata->hw_trig[list])
+				dcc_writel(drvdata, BIT(8) | ((drvdata->data_sink[list] << 4) |
+					   (drvdata->func_type[list])), DCC_LL_CFG(list));
+			else
+				dcc_writel(drvdata, ~BIT(8) & ((drvdata->data_sink[list] << 4) |
+					   (drvdata->func_type[list])), DCC_LL_CFG(list));
 		} else {
-			dcc_writel(drvdata, BIT(9) | ((drvdata->cti_trig[list] << 8) |
-				   (drvdata->data_sink[list] << 4) |
-				   (drvdata->func_type[list])), DCC_LL_CFG(list));
+			if (drvdata->hw_trig[list])
+				dcc_writel(drvdata, BIT(9) | ((drvdata->cti_trig[list] << 8) |
+					   (drvdata->data_sink[list] << 4) |
+					   (drvdata->func_type[list])), DCC_LL_CFG(list));
+			else
+				dcc_writel(drvdata, ~BIT(9) & ((drvdata->cti_trig[list] << 8) |
+					   (drvdata->data_sink[list] << 4) |
+					   (drvdata->func_type[list])), DCC_LL_CFG(list));
 		}
 	}
 
+	drvdata->ram_cpy_len = drvdata->ram_cfg * 4;
 err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
@@ -757,6 +807,7 @@ static void dcc_disable(struct dcc_drvdata *drvdata)
 	}
 	memset_io(drvdata->ram_base, 0, drvdata->ram_size);
 	drvdata->ram_cfg = 0;
+	drvdata->ram_cpy_len = 0;
 	drvdata->ram_start = 0;
 	mutex_unlock(&drvdata->mutex);
 }
@@ -983,7 +1034,7 @@ static ssize_t enable_store(struct device *dev,
 	unsigned long val;
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 
-	if (kstrtoul(buf, 16, &val))
+	if (kstrtoul(buf, 16, &val) || val > 1)
 		return -EINVAL;
 
 	if (val)
@@ -1025,7 +1076,7 @@ static ssize_t ap_ns_qad_override_en_store(struct device *dev,
 		return -EINVAL;
 	}
 
-	if (kstrtoul(buf, 16, &val))
+	if (kstrtoul(buf, 16, &val) || val > 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -1053,6 +1104,108 @@ out:
 
 }
 static DEVICE_ATTR_RW(ap_ns_qad_override_en);
+
+static ssize_t hw_trig_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (drvdata->curr_list >= drvdata->nr_link_list) {
+		dev_err(dev, "Select link list to program using curr_list\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	ret = scnprintf(buf, PAGE_SIZE, "%u\n",
+			(unsigned int)drvdata->hw_trig[drvdata->curr_list]);
+
+err:
+	return ret;
+}
+
+static ssize_t hw_trig_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	int ret = 0;
+	unsigned long val;
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if ((kstrtoul(buf, 16, &val)) || val > 1)
+		return -EINVAL;
+
+	mutex_lock(&drvdata->mutex);
+
+	if (drvdata->curr_list >= drvdata->nr_link_list) {
+		dev_err(dev, "Select link list to program using curr_list\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	if (drvdata->enable[drvdata->curr_list]) {
+		ret = -EBUSY;
+		goto err;
+	}
+
+	if (val)
+		drvdata->hw_trig[drvdata->curr_list] = true;
+	else
+		drvdata->hw_trig[drvdata->curr_list] = false;
+
+	ret = size;
+err:
+	mutex_unlock(&drvdata->mutex);
+	return ret;
+}
+static DEVICE_ATTR_RW(hw_trig);
+
+static ssize_t sw_trig_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (drvdata->curr_list >= drvdata->nr_link_list) {
+		dev_err(dev, "Select link list to program using curr_list\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	ret = scnprintf(buf, PAGE_SIZE, "%u\n",
+			(unsigned int)drvdata->sw_trig[drvdata->curr_list]);
+
+err:
+	return ret;
+}
+
+static ssize_t sw_trig_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	int ret = 0;
+	unsigned long val;
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if ((kstrtoul(buf, 16, &val)) || val > 1)
+		return -EINVAL;
+
+	if (drvdata->curr_list >= drvdata->nr_link_list) {
+		dev_err(dev, "Select link list to program using curr_list\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	if (val)
+		drvdata->sw_trig[drvdata->curr_list] = true;
+	else
+		drvdata->sw_trig[drvdata->curr_list] = false;
+
+	ret = size;
+err:
+	return ret;
+}
+static DEVICE_ATTR_RW(sw_trig);
 
 static ssize_t config_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
@@ -1219,16 +1372,16 @@ static ssize_t config_store(struct device *dev,
 	int nval;
 
 	nval = sscanf(buf, "%x %i %d", &base, &len, &apb_bus);
-	if (nval <= 0 || nval > 3)
+	if ((nval <= 0 || nval > 3) || (apb_bus < 0 || apb_bus > 1))
 		return -EINVAL;
 
 	if (nval == 1) {
 		len = 1;
 		apb_bus = 0;
-	} else if (nval == 2) {
-		apb_bus = 0;
-	} else {
+	} else if (nval == 3 && apb_bus == 1) {
 		apb_bus = 1;
+	} else {
+		apb_bus = 0;
 	}
 
 	ret = dcc_config_add(drvdata, base, len, apb_bus);
@@ -1258,6 +1411,7 @@ static void dcc_config_reset(struct dcc_drvdata *drvdata)
 	}
 	drvdata->ram_start = 0;
 	drvdata->ram_cfg = 0;
+	drvdata->ram_cpy_len = 0;
 	mutex_unlock(&drvdata->mutex);
 }
 
@@ -1268,7 +1422,7 @@ static ssize_t config_reset_store(struct device *dev,
 	unsigned long val;
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 
-	if (kstrtoul(buf, 16, &val))
+	if (kstrtoul(buf, 16, &val) || val > 1)
 		return -EINVAL;
 
 	if (val)
@@ -1349,7 +1503,7 @@ static ssize_t interrupt_disable_store(struct device *dev,
 	unsigned long val;
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 
-	if (kstrtoul(buf, 16, &val))
+	if (kstrtoul(buf, 16, &val) || val > 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -1505,7 +1659,7 @@ static ssize_t config_write_store(struct device *dev,
 
 	nval = sscanf(buf, "%x %x %d", &addr, &write_val, &apb_bus);
 
-	if (nval <= 1 || nval > 3) {
+	if ((nval <= 1 || nval > 3) || (apb_bus < 0 || apb_bus > 1)) {
 		ret = -EINVAL;
 		goto err;
 	}
@@ -1516,7 +1670,7 @@ static ssize_t config_write_store(struct device *dev,
 		goto err;
 	}
 
-	if (nval == 3 && apb_bus != 0)
+	if (nval == 3 && apb_bus == 1)
 		apb_bus = 1;
 
 	ret = dcc_add_write(drvdata, addr, write_val, apb_bus);
@@ -1536,11 +1690,6 @@ static ssize_t cti_trig_show(struct device *dev,
 {
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 
-	if (drvdata->mem_map_ver == DCC_MEM_MAP_VER3) {
-		dev_err(dev, "cti trig is not supported\n");
-		return -EINVAL;
-	}
-
 	return scnprintf(buf, PAGE_SIZE, "%d\n", drvdata->cti_trig[drvdata->curr_list]);
 }
 
@@ -1552,12 +1701,7 @@ static ssize_t cti_trig_store(struct device *dev,
 	int ret = 0;
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 
-	if (drvdata->mem_map_ver == DCC_MEM_MAP_VER3) {
-		dev_err(dev, "cti trig is not supported\n");
-		return -EINVAL;
-	}
-
-	if (kstrtoul(buf, 16, &val))
+	if (kstrtoul(buf, 16, &val) || val > 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -1590,6 +1734,8 @@ static const struct device_attribute *dcc_attrs[] = {
 	&dev_attr_data_sink,
 	&dev_attr_trigger,
 	&dev_attr_enable,
+	&dev_attr_hw_trig,
+	&dev_attr_sw_trig,
 	&dev_attr_config,
 	&dev_attr_config_reset,
 	&dev_attr_ready,
@@ -1635,6 +1781,7 @@ static ssize_t dcc_sram_read(struct file *file, char __user *data,
 {
 	unsigned char *buf;
 	struct dcc_drvdata *drvdata = file->private_data;
+	int ret;
 
 	/* EOF check */
 	if (drvdata->ram_size <= *ppos)
@@ -1648,7 +1795,13 @@ static ssize_t dcc_sram_read(struct file *file, char __user *data,
 	if (!buf)
 		return -ENOMEM;
 
-	memcpy_fromio(buf, (drvdata->ram_base + *ppos), len);
+	ret = dcc_sram_memcpy(buf, (drvdata->ram_base + *ppos), len);
+	if (ret) {
+		dev_err(drvdata->dev,
+			"Target address or size not aligned with 4 bytes\n");
+		kfree(buf);
+		return ret;
+	}
 
 	if (copy_to_user(data, buf, len)) {
 		dev_err(drvdata->dev,
@@ -1888,18 +2041,38 @@ static int dcc_probe(struct platform_device *pdev)
 	if (ret)
 		return -EINVAL;
 
-	if (BVAL(dcc_readl(drvdata, DCC_HW_INFO), 9)) {
-		drvdata->mem_map_ver = DCC_MEM_MAP_VER3;
-		drvdata->nr_link_list = dcc_readl(drvdata, DCC_LL_NUM_INFO);
-		if (drvdata->nr_link_list == 0)
-			return  -EINVAL;
-	} else if ((dcc_readl(drvdata, DCC_HW_INFO) & 0x3F) == 0x3F) {
-		drvdata->mem_map_ver = DCC_MEM_MAP_VER2;
+	drvdata->ll_state_cnt = of_property_count_elems_of_size(dev->of_node,
+					"ll-reg-offsets", sizeof(u32)); /* optional */
+	if (drvdata->ll_state_cnt <= 0) {
+		dev_info(dev, "ll-reg-offsets property doesn't exist\n");
+		drvdata->ll_state_cnt = 0;
+	} else {
+		ret = of_property_read_u32(pdev->dev.of_node, "per-ll-reg-cnt",
+					&drvdata->per_ll_reg_cnt);
+		if (ret)
+			return -EINVAL;
+	}
+
+	ret = of_property_read_u32(pdev->dev.of_node, "dcc-mem-map-ver",
+					&drvdata->mem_map_ver);
+	if (ret) {
+		if (BVAL(dcc_readl(drvdata, DCC_HW_INFO), 9))
+			drvdata->mem_map_ver = DCC_MEM_MAP_VER3;
+		else if ((dcc_readl(drvdata, DCC_HW_INFO) & 0x3F) == 0x3F)
+			drvdata->mem_map_ver = DCC_MEM_MAP_VER2;
+		else
+			drvdata->mem_map_ver = DCC_MEM_MAP_VER1;
+	}
+
+	if (drvdata->mem_map_ver < DCC_MEM_MAP_VER1
+			|| drvdata->mem_map_ver > DCC_MEM_MAP_VER3)
+		return  -EINVAL;
+
+	if (drvdata->mem_map_ver) {
 		drvdata->nr_link_list = dcc_readl(drvdata, DCC_LL_NUM_INFO);
 		if (drvdata->nr_link_list == 0)
 			return  -EINVAL;
 	} else {
-		drvdata->mem_map_ver = DCC_MEM_MAP_VER1;
 		drvdata->nr_link_list = DCC_MAX_LINK_LIST;
 	}
 
@@ -1920,6 +2093,14 @@ static int dcc_probe(struct platform_device *pdev)
 	drvdata->enable = devm_kzalloc(dev, drvdata->nr_link_list *
 			sizeof(bool), GFP_KERNEL);
 	if (!drvdata->enable)
+		return -ENOMEM;
+	drvdata->hw_trig = devm_kzalloc(dev, drvdata->nr_link_list *
+			sizeof(bool), GFP_KERNEL);
+	if (!drvdata->hw_trig)
+		return -ENOMEM;
+	drvdata->sw_trig = devm_kzalloc(dev, drvdata->nr_link_list *
+			sizeof(bool), GFP_KERNEL);
+	if (!drvdata->sw_trig)
 		return -ENOMEM;
 	drvdata->configured = devm_kzalloc(dev, drvdata->nr_link_list *
 			sizeof(bool), GFP_KERNEL);
@@ -1945,6 +2126,8 @@ static int dcc_probe(struct platform_device *pdev)
 	for (i = 0; i < drvdata->nr_link_list; i++) {
 		INIT_LIST_HEAD(&drvdata->cfg_head[i]);
 		drvdata->nr_config[i] = 0;
+		drvdata->hw_trig[i] = true;
+		drvdata->sw_trig[i] = false;
 	}
 
 	memset_io(drvdata->ram_base, 0, drvdata->ram_size);
@@ -1985,6 +2168,209 @@ static int dcc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#if defined(CONFIG_DEEPSLEEP) || defined(CONFIG_HIBERNATION)
+static int dcc_state_store(struct device *dev)
+{
+	int ret = 0, n, i;
+	u32 *ll_reg_offsets;
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if (!drvdata) {
+		dev_dbg(dev, "Invalid drvdata\n");
+		return -EINVAL;
+	}
+
+	if (!is_dcc_enabled(drvdata)) {
+		dev_dbg(dev, "DCC is not enabled.\n");
+		return 0;
+	}
+
+	if (!drvdata->ll_state_cnt) {
+		dev_dbg(dev, "reg-offsets property doesn't exist\n");
+		return 0;
+	}
+
+	n = drvdata->ll_state_cnt;
+	ll_reg_offsets = kcalloc(n, sizeof(u32), GFP_KERNEL);
+	if (!ll_reg_offsets) {
+		dev_err(dev, "Failed to alloc memory for reg_offsets\n");
+		return -ENOMEM;
+	}
+
+	ret = of_property_read_variable_u32_array(dev->of_node,
+					"ll-reg-offsets", ll_reg_offsets, n, n);
+	if (ret < 0) {
+		dev_dbg(dev, "Not found reg-offsets property\n");
+		goto out;
+	}
+
+	drvdata->ll_state = kzalloc(n * sizeof(struct reg_state), GFP_KERNEL);
+	if (!drvdata->ll_state) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	drvdata->sram_state = kzalloc(drvdata->ram_size, GFP_KERNEL);
+	if (!drvdata->sram_state) {
+		ret = -ENOMEM;
+		goto sram_alloc_err;
+	}
+
+	if (dcc_sram_memcpy(drvdata->sram_state, drvdata->ram_base,
+				drvdata->ram_cpy_len)) {
+		dev_err(dev, "Failed to copy DCC SRAM contents\n");
+		ret = -EINVAL;
+		goto sram_cpy_err;
+	}
+
+	mutex_lock(&drvdata->mutex);
+
+	for (i = 0; i < n; i++) {
+		drvdata->ll_state[i].offset = ll_reg_offsets[i];
+		drvdata->ll_state[i].val    = __raw_readl(drvdata->base + ll_reg_offsets[i]);
+	}
+
+	mutex_unlock(&drvdata->mutex);
+
+	kfree(ll_reg_offsets);
+	return 0;
+
+sram_cpy_err:
+	kfree(drvdata->sram_state);
+	drvdata->sram_state = NULL;
+sram_alloc_err:
+	kfree(drvdata->ll_state);
+	drvdata->ll_state = NULL;
+out:
+	kfree(ll_reg_offsets);
+	return ret;
+}
+
+static int dcc_state_restore(struct device *dev)
+{
+	int n, i, j, dcc_ll_index;
+	int ret = 0;
+	int *sram_state;
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+	uint32_t ram_cpy_wlen;
+
+	if (!drvdata) {
+		dev_err(dev, "Err: %s Invalid argument\n", __func__);
+		return -EINVAL;
+	}
+
+	if (!is_dcc_enabled(drvdata)) {
+		dev_dbg(dev, "DCC is not enabled.\n");
+		ret = 0;
+		goto out;
+	}
+
+	if (!drvdata->ll_state_cnt) {
+		dev_dbg(dev, "reg-offsets property doesn't exist\n");
+		ret = 0;
+		goto out;
+	}
+
+	if (!drvdata->sram_state || !drvdata->ll_state) {
+		dev_err(dev, "Err: Restore state is NULL\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ram_cpy_wlen = drvdata->ram_cpy_len / 4;
+	sram_state = drvdata->sram_state;
+	n = drvdata->ll_state_cnt;
+
+	for (i = 0; i < ram_cpy_wlen; i++)
+		dcc_sram_writel(drvdata, sram_state[i], i * 4);
+
+	mutex_lock(&drvdata->mutex);
+
+	for (i = 0, dcc_ll_index = 0;
+		 (dcc_ll_index < drvdata->nr_link_list) && (i < n);
+		 dcc_ll_index++) {
+
+		if (list_empty(&drvdata->cfg_head[dcc_ll_index])) {
+			i += drvdata->per_ll_reg_cnt;
+			continue;
+		}
+
+		for (j = 0; j < drvdata->per_ll_reg_cnt; i++, j++)
+			__raw_writel(drvdata->ll_state[i].val,
+						drvdata->base + drvdata->ll_state[i].offset);
+	}
+
+	mutex_unlock(&drvdata->mutex);
+out:
+	kfree(drvdata->sram_state);
+	drvdata->sram_state = NULL;
+
+	kfree(drvdata->ll_state);
+	drvdata->ll_state = NULL;
+
+	return ret;
+}
+#endif
+
+#ifdef CONFIG_DEEPSLEEP
+static int dcc_v2_suspend(struct device *dev)
+{
+	if (pm_suspend_via_firmware())
+		return dcc_state_store(dev);
+
+	return 0;
+}
+
+static int dcc_v2_resume(struct device *dev)
+{
+	if (pm_suspend_via_firmware())
+		return dcc_state_restore(dev);
+
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_HIBERNATION
+static int dcc_v2_freeze(struct device *dev)
+{
+	return dcc_state_store(dev);
+}
+
+static int dcc_v2_restore(struct device *dev)
+{
+	return dcc_state_restore(dev);
+}
+
+static int dcc_v2_thaw(struct device *dev)
+{
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if (!drvdata || !drvdata->ll_state || !drvdata->sram_state) {
+		dev_err(dev, "Err: %s Invalid argument\n", __func__);
+		return -EINVAL;
+	}
+
+	kfree(drvdata->sram_state);
+	kfree(drvdata->ll_state);
+	drvdata->sram_state = NULL;
+	drvdata->ll_state = NULL;
+
+	return 0;
+}
+#endif
+
+static const struct dev_pm_ops dcc_v2_pm_ops = {
+#ifdef CONFIG_DEEPSLEEP
+	.suspend         = dcc_v2_suspend,
+	.resume          = dcc_v2_resume,
+#endif
+#ifdef CONFIG_HIBERNATION
+	.freeze          = dcc_v2_freeze,
+	.restore         = dcc_v2_restore,
+	.thaw            = dcc_v2_thaw,
+#endif
+};
+
 static const struct of_device_id msm_dcc_match[] = {
 	{ .compatible = "qcom,dcc-v2"},
 	{}
@@ -1996,6 +2382,7 @@ static struct platform_driver dcc_driver = {
 	.driver         = {
 		.name   = "msm-dcc",
 		.of_match_table	= msm_dcc_match,
+		.pm     = &dcc_v2_pm_ops,
 	},
 };
 

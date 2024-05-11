@@ -13,6 +13,7 @@ enum msm_pcie_config {
 	MSM_PCIE_CONFIG_NO_RECOVERY = BIT(1),
 	MSM_PCIE_CONFIG_NO_L1SS_TO = BIT(2),
 	MSM_PCIE_CONFIG_NO_DRV_PC = BIT(3),
+	MSM_PCIE_CONFIG_FORCE_SUSP = BIT(4),
 };
 
 enum msm_pcie_pm_opt {
@@ -203,6 +204,28 @@ int msm_pcie_enumerate(u32 rc_idx);
 int msm_pcie_debug_info(struct pci_dev *dev, u32 option, u32 base,
 			u32 offset, u32 mask, u32 value);
 
+/*
+ * msm_pcie_reg_dump - dump pcie regsters for debug
+ * @pci_dev:	pci device structure
+ * @buffer:	destination buffer address
+ * @len:		length of buffer
+ *
+ * This functions dumps PCIE registers for debug. Sould be used when
+ * link is already enabled
+ */
+int msm_pcie_reg_dump(struct pci_dev *pci_dev, u8 *buff, u32 len);
+
+/*
+ * msm_pcie_dsp_link_control - enable/disable DSP link
+ * @pci_dev:	pci device structure, endpoint of this DSP
+ * @link_enable true to enable, false to disable
+ *
+ * This function enable(include training)/disable link between PCIe
+ * switch DSP and endpoint attached.
+ * Return: 0 on success, negative value on error
+ */
+int msm_pcie_dsp_link_control(struct pci_dev *pci_dev,
+				    bool link_enable);
 #else /* !CONFIG_PCI_MSM */
 static inline int msm_pcie_pm_control(enum msm_pcie_pm_opt pm_opt, u32 busnr,
 			void *user, void *data, u32 options)
@@ -252,6 +275,17 @@ static inline int msm_pcie_enumerate(u32 rc_idx)
 
 static inline int msm_pcie_debug_info(struct pci_dev *dev, u32 option, u32 base,
 			u32 offset, u32 mask, u32 value)
+{
+	return -ENODEV;
+}
+
+static inline int msm_pcie_reg_dump(struct pci_dev *pci_dev, u8 *buff, u32 len)
+{
+	return -ENODEV;
+}
+
+static inline int msm_pcie_dsp_link_control(struct pci_dev *pci_dev,
+						  bool link_enable)
 {
 	return -ENODEV;
 }

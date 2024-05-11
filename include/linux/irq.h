@@ -73,6 +73,7 @@ enum irqchip_irq_state;
  * IRQ_DISABLE_UNLAZY		- Disable lazy irq disable
  * IRQ_HIDDEN			- Don't show up in /proc/interrupts
  * IRQ_NO_DEBUG			- Exclude from note_interrupt() debugging
+ * IRQ_RAW			- Skip tick management and irqtime accounting
  */
 enum {
 	IRQ_TYPE_NONE		= 0x00000000,
@@ -101,6 +102,7 @@ enum {
 	IRQ_DISABLE_UNLAZY	= (1 << 19),
 	IRQ_HIDDEN		= (1 << 20),
 	IRQ_NO_DEBUG		= (1 << 21),
+	IRQ_RAW			= (1 << 22),
 };
 
 #define IRQF_MODIFY_MASK	\
@@ -875,16 +877,22 @@ static inline int irq_data_get_node(struct irq_data *d)
 	return irq_common_data_get_node(d->common);
 }
 
+static inline struct cpumask *irq_data_get_affinity_mask(struct irq_data *d)
+{
+	return d->common->affinity;
+}
+
+static inline void irq_data_update_affinity(struct irq_data *d,
+					    const struct cpumask *m)
+{
+	cpumask_copy(d->common->affinity, m);
+}
+
 static inline struct cpumask *irq_get_affinity_mask(int irq)
 {
 	struct irq_data *d = irq_get_irq_data(irq);
 
-	return d ? d->common->affinity : NULL;
-}
-
-static inline struct cpumask *irq_data_get_affinity_mask(struct irq_data *d)
-{
-	return d->common->affinity;
+	return d ? irq_data_get_affinity_mask(d) : NULL;
 }
 
 #ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
@@ -906,7 +914,7 @@ static inline void irq_data_update_effective_affinity(struct irq_data *d,
 static inline
 struct cpumask *irq_data_get_effective_affinity_mask(struct irq_data *d)
 {
-	return d->common->affinity;
+	return irq_data_get_affinity_mask(d);
 }
 #endif
 

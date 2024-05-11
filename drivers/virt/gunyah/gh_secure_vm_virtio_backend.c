@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/interrupt.h>
@@ -639,14 +639,18 @@ loop_back:
 		if (copy_from_user(&d, argp, sizeof(d)))
 			return -EFAULT;
 
-		if (!d.label || !d.config_size || !d.config_data)
-			return -EINVAL;
-
 		vb_dev = vb_dev_get(vm, d.label);
 		if (!vb_dev)
 			return -EINVAL;
 
 		mutex_lock(&vb_dev->mutex);
+		if (!d.label || d.config_size > vb_dev->config_shared_size ||
+			!d.config_size || !d.config_data) {
+			mutex_unlock(&vb_dev->mutex);
+			vb_dev_put(vb_dev);
+			return -EINVAL;
+		}
+
 		if (!vb_dev->config_shared_buf) {
 			mutex_unlock(&vb_dev->mutex);
 			vb_dev_put(vb_dev);
@@ -662,15 +666,18 @@ loop_back:
 		if (copy_from_user(&d, argp, sizeof(d)))
 			return -EFAULT;
 
-		if (!d.label || d.config_size > PAGE_SIZE ||
-			!d.config_size || !d.config_data)
-			return -EINVAL;
-
 		vb_dev = vb_dev_get(vm, d.label);
 		if (!vb_dev)
 			return -EINVAL;
 
 		mutex_lock(&vb_dev->mutex);
+		if (!d.label || d.config_size > vb_dev->config_shared_size ||
+			!d.config_size || !d.config_data) {
+			mutex_unlock(&vb_dev->mutex);
+			vb_dev_put(vb_dev);
+			return -EINVAL;
+		}
+
 		if (vb_dev->config_data) {
 			mutex_unlock(&vb_dev->mutex);
 			vb_dev_put(vb_dev);
@@ -976,13 +983,14 @@ done:
 
 int gh_parse_virtio_properties(struct device *dev, const char *vm_name)
 {
-	struct device_node *np = dev->of_node;
+	struct device_node *np;
 	int idx = 0;
 	u32 len, nr_entries = 0;
 
 	if (!dev || !vm_name)
 		return -EINVAL;
 
+	np = dev->of_node;
 	if (of_find_property(np, "virtio-backends", &len))
 		nr_entries = len / 4;
 	if (!nr_entries) {

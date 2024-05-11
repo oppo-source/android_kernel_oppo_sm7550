@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef ADSPRPC_SHARED_H
 #define ADSPRPC_SHARED_H
@@ -92,6 +92,9 @@
 /* Set FastRPC session ID to 1 */
 #define FASTRPC_MODE_SESSION     4
 
+/* Retrieves method index from the scalars parameter */
+#define REMOTE_SCALARS_METHOD(sc)        (((sc) >> 24) & 0x1f)
+
 /* Retrives number of input buffers from the scalars parameter */
 #define REMOTE_SCALARS_INBUFS(sc)        (((sc) >> 16) & 0x0ff)
 
@@ -103,6 +106,27 @@
 
 /* Retrives number of output handles from the scalars parameter */
 #define REMOTE_SCALARS_OUTHANDLES(sc)    ((sc) & 0x0f)
+
+/* Remote domains ID */
+#define ADSP_DOMAIN_ID		(0)
+#define MDSP_DOMAIN_ID		(1)
+#define SDSP_DOMAIN_ID		(2)
+#define CDSP_DOMAIN_ID		(3)
+#define CDSP1_DOMAIN_ID		(4)
+#define GPDSP_DOMAIN_ID		(5)
+#define GPDSP1_DOMAIN_ID	(6)
+#define MAX_DOMAIN_ID	GPDSP1_DOMAIN_ID
+
+#define NUM_CHANNELS	(MAX_DOMAIN_ID + 1)	/* adsp, mdsp, slpi, cdsp, cdsp1, gpdsp, gpdsp1*/
+#define NUM_SESSIONS	13	/* max 12 compute, 1 cpz */
+
+#define RH_CID ADSP_DOMAIN_ID
+
+#define VALID_FASTRPC_CID(cid) \
+	(cid >= ADSP_DOMAIN_ID && cid < NUM_CHANNELS)
+
+#define GET_DEV_FROM_CID(me, cid) \
+	((me->dev[cid] == NULL) ? me->dev[RH_CID] : me->dev[cid])
 
 #define REMOTE_SCALARS_LENGTH(sc)	(REMOTE_SCALARS_INBUFS(sc) +\
 					REMOTE_SCALARS_OUTBUFS(sc) +\
@@ -470,6 +494,7 @@ enum dsp_map_flags {
 
 enum fastrpc_control_type {
 	FASTRPC_CONTROL_LATENCY		=	1,
+	/* Share SMMU context bank */
 	FASTRPC_CONTROL_SMMU		=	2,
 	FASTRPC_CONTROL_KALLOC		=	3,
 	FASTRPC_CONTROL_WAKELOCK	=	4,
@@ -477,6 +502,8 @@ enum fastrpc_control_type {
 /* Clean process on DSP */
 	FASTRPC_CONTROL_DSPPROCESS_CLEAN	=	6,
 	FASTRPC_CONTROL_RPC_POLL = 7,
+	FASTRPC_CONTROL_ASYNC_WAKE = 8,
+	FASTRPC_CONTROL_NOTIF_WAKE = 9,
 };
 
 struct fastrpc_ctrl_latency {
@@ -496,6 +523,10 @@ struct fastrpc_ctrl_pm {
 	uint32_t timeout;	/* timeout(in ms) for PM to keep system awake */
 };
 
+struct fastrpc_ctrl_smmu {
+	uint32_t sharedcb;  /* Set to SMMU share context bank */
+};
+
 struct fastrpc_ioctl_control {
 	uint32_t req;
 	union {
@@ -503,6 +534,7 @@ struct fastrpc_ioctl_control {
 		struct fastrpc_ctrl_kalloc kalloc;
 		struct fastrpc_ctrl_wakelock wp;
 		struct fastrpc_ctrl_pm pm;
+		struct fastrpc_ctrl_smmu smmu;
 	};
 };
 
@@ -561,6 +593,12 @@ enum fastrpc_response_flags {
 	POLL_MODE = 5,
 };
 
+enum fastrpc_process_create_state {
+	PROCESS_CREATE_DEFAULT = 0,			/* Process is not created */
+	PROCESS_CREATE_IS_INPROGRESS = 1,	/* Process creation is in progress */
+	PROCESS_CREATE_SUCCESS = 2,			/* Process creation is successful */
+};
+
 struct smq_invoke_rspv2 {
 	uint64_t ctx;		  /* invoke caller context */
 	int retval;		  /* invoke return value */
@@ -597,6 +635,15 @@ enum fastrpc_process_exit_states {
 	FASTRPC_PROCESS_DSP_EXIT_ERROR				= 4,
 };
 
+inline int fastrpc_transport_send(int cid, void *rpc_msg, uint32_t rpc_msg_size, bool trusted_vm);
+inline int fastrpc_handle_rpc_response(void *data, int len, int cid);
+inline int verify_transport_device(int cid, bool trusted_vm);
+int fastrpc_transport_init(void);
+void fastrpc_transport_deinit(void);
+void fastrpc_transport_session_init(int cid, char *subsys);
+void fastrpc_transport_session_deinit(int cid);
+int fastrpc_wait_for_transport_interrupt(int cid, unsigned int flags);
+
 static inline struct smq_invoke_buf *smq_invoke_buf_start(remote_arg64_t *pra,
 							uint32_t sc)
 {
@@ -612,10 +659,6 @@ static inline struct smq_phy_page *smq_phy_page_start(uint32_t sc,
 
 	return (struct smq_phy_page *)(&buf[nTotal]);
 }
-
-
-#define NUM_CHANNELS	4	/* adsp, mdsp, slpi, cdsp*/
-#define NUM_SESSIONS	13	/* max 12 compute, 1 cpz */
 
 /*
  * Fastrpc context ID bit-map:
@@ -667,11 +710,6 @@ struct gid_list {
 	unsigned int gidcount;
 };
 
-struct qos_cores {
-	int *coreno;
-	int corecount;
-};
-
 struct fastrpc_file;
 
 struct fastrpc_buf {
@@ -694,9 +732,9 @@ struct fastrpc_buf {
 struct fastrpc_ctx_lst;
 
 struct fastrpc_tx_msg {
-	struct smq_msg msg; /* Msg sent to remote subsystem */
-	int rpmsg_send_err; /* rpmsg error */
-	int64_t ns;         /* Timestamp (in ns) of msg */
+	struct smq_msg msg;     /* Msg sent to remote subsystem */
+	int transport_send_err; /* transport error */
+	int64_t ns;             /* Timestamp (in ns) of msg */
 	uint64_t xo_time_in_us; /* XO Timestamp (in us) of sent message */
 };
 
@@ -706,7 +744,7 @@ struct fastrpc_rx_msg {
 	uint64_t xo_time_in_us; /* XO Timestamp (in us) of response */
 };
 
-struct fastrpc_rpmsg_log {
+struct fastrpc_transport_log {
 	unsigned int tx_index;  /* Current index of 'tx_msgs' array */
 	unsigned int rx_index;  /* Current index of 'rx_msgs' array */
 
@@ -751,7 +789,7 @@ struct smq_notif_rsp {
 struct smq_invoke_ctx {
 	struct hlist_node hn;
 	/* Async node to add to async job ctx list */
-	struct list_head asyncn;
+	struct hlist_node asyncn;
 	struct completion work;
 	int retval;
 	int pid;
@@ -798,7 +836,7 @@ struct fastrpc_ctx_lst {
 	/* Number of active contexts queued to DSP */
 	uint32_t num_active_ctxs;
 	/* Queue which holds all async job contexts of process */
-	struct list_head async_queue;
+	struct hlist_head async_queue;
 	/* Queue which holds all status notifications of process */
 	struct list_head notif_queue;
 };
@@ -811,6 +849,15 @@ struct fastrpc_smmu {
 	int faults;
 	int secure;
 	int coherent;
+	int sharedcb;
+	/* gen pool for QRTR */
+	struct gen_pool *frpc_genpool;
+	/* fastrpc gen pool buffer */
+	struct fastrpc_buf *frpc_genpool_buf;
+	/* fastrpc gen pool buffer fixed IOVA */
+	unsigned long genpool_iova;
+	/* fastrpc gen pool buffer size */
+	size_t genpool_size;
 };
 
 struct fastrpc_session_ctx {
@@ -838,7 +885,6 @@ struct fastrpc_dsp_capabilities {
 struct fastrpc_channel_ctx {
 	char *name;
 	char *subsys;
-	struct rpmsg_device *rpdev;
 	struct device *dev;
 	struct fastrpc_session_ctx session[NUM_SESSIONS];
 	struct fastrpc_static_pd spd[NUM_SESSIONS];
@@ -846,12 +892,12 @@ struct fastrpc_channel_ctx {
 	struct completion workport;
 	struct notifier_block nb;
 	struct mutex smd_mutex;
-	struct mutex rpmsg_mutex;
 	uint64_t sesscount;
 	uint64_t ssrcount;
+	int hib_state;
 	void *handle;
 	uint64_t prevssrcount;
-	int issubsystemup;
+	int subsystemstate;
 	int vmid;
 	struct secure_vm rhvm;
 	void *rh_dump_dev;
@@ -865,13 +911,10 @@ struct fastrpc_channel_ctx {
 	bool cpuinfo_status;
 	struct smq_invoke_ctx *ctxtable[FASTRPC_CTX_MAX];
 	spinlock_t ctxlock;
-	struct fastrpc_rpmsg_log gmsg_log;
+	struct fastrpc_transport_log gmsg_log;
 	struct hlist_head initmems;
 	/* Store gfa structure debug details */
 	struct fastrpc_buf *buf;
-	/* Flags for DSP up mutex */
-	wait_queue_head_t wait_for_rpmsg_ch;
-	atomic_t is_rpmsg_ch_up;
 };
 
 struct fastrpc_apps {
@@ -885,11 +928,11 @@ struct fastrpc_apps {
 	int compat;
 	struct hlist_head drivers;
 	spinlock_t hlock;
-	struct device *dev;
+	struct device *dev[NUM_CHANNELS];
 	/* Indicates fastrpc device node info */
 	struct device *dev_fastrpc;
 	unsigned int latency;
-	int rpmsg_register;
+	int transport_initialized;
 	/* Flag to determine fastrpc bus registration */
 	int fastrpc_bus_register;
 	bool legacy_remote_heap;
@@ -903,13 +946,16 @@ struct fastrpc_apps {
 	/* Non-secure subsystem like CDSP will use regular client */
 	struct wakeup_source *wake_source;
 	uint32_t duplicate_rsp_err_cnt;
-	struct qos_cores silvercores;
 	uint32_t max_size_limit;
 	struct hlist_head frpc_devices;
 	struct hlist_head frpc_drivers;
 	struct mutex mut_uid;
 	/* Indicates cdsp device status */
-	int remote_cdsp_status;
+	int fastrpc_cdsp_status;
+	/* Number of lowest capacity cores for given platform */
+	unsigned int lowest_capacity_core_count;
+	/* Flag to check if PM QoS vote needs to be done for only one core */
+	bool single_core_latency_vote;
 };
 
 struct fastrpc_mmap {
@@ -929,13 +975,16 @@ struct fastrpc_mmap {
 	int refs;
 	uintptr_t raddr;
 	int secure;
-	/* Minidump unique index */
-	int frpc_md_index;
+	bool is_persistent;			/* the map is persistenet across sessions */
+	int frpc_md_index;			/* Minidump unique index */
 	uintptr_t attr;
+	bool in_use;				/* Indicates if persistent map is in use*/
 	struct timespec64 map_start_time;
 	struct timespec64 map_end_time;
 	/* Mapping for fastrpc shell */
-	bool is_filemap;
+	bool is_filemap;			/*flag to indicate map used in process init*/
+	char *servloc_name;			/* Indicate which daemon mapped this */
+	unsigned int ctx_refs; /* Indicates reference count for context map */
 };
 
 enum fastrpc_perfkeys {
@@ -975,6 +1024,13 @@ struct fastrpc_dspsignal {
 	int state;
 };
 
+struct memory_snapshot {
+	/* Total size of heap buffers allocated in userspace */
+	size_t heap_bufs_size;
+	/* Total size of non-heap buffers allocated in userspace */
+	size_t nonheap_bufs_size;
+};
+
 struct fastrpc_file {
 	struct hlist_node hn;
 	spinlock_t hlock;
@@ -992,6 +1048,8 @@ struct fastrpc_file {
 	struct fastrpc_buf *pers_hdr_buf;
 	/* Pre-allocated buffer divided into N chunks */
 	struct fastrpc_buf *hdr_bufs;
+	/* Store snapshot of memory occupied by different buffers */
+	struct memory_snapshot mem_snap;
 
 	struct fastrpc_session_ctx *secsctx;
 	uint32_t mode;
@@ -1000,11 +1058,13 @@ struct fastrpc_file {
 	int tgid_open;	/* Process ID during device open */
 	int tgid;		/* Process ID that uses device for RPC calls */
 	int cid;
+	bool trusted_vm;
 	uint64_t ssrcount;
 	int pd;
 	char *servloc_name;
 	int file_close;
 	int dsp_proc_init;
+	int sharedcb;
 	struct fastrpc_apps *apps;
 	struct dentry *debugfs_file;
 	struct dev_pm_qos_request *dev_pm_qos_req;
@@ -1034,6 +1094,10 @@ struct fastrpc_file {
 	struct completion work;
 	/* Flag to indicate ram dump collection status*/
 	bool is_ramdump_pend;
+	/* Process kill will wait on bus driver invoke thread to complete its process */
+	struct completion dma_invoke;
+	/* Flag to indicate invoke pending */
+	bool is_dma_invoke_pend;
 	/* Flag to indicate type of process (static, dynamic) */
 	uint32_t proc_flags;
 	/* If set, threads will poll for DSP response instead of glink wait */
@@ -1041,7 +1105,7 @@ struct fastrpc_file {
 	/* Threads poll for specified timeout and fall back to glink wait */
 	uint32_t poll_timeout;
 	/* Flag to indicate dynamic process creation status*/
-	bool in_process_create;
+	enum fastrpc_process_create_state dsp_process_state;
 	bool is_unsigned_pd;
 	/* Flag to indicate 32 bit driver*/
 	bool is_compat;
@@ -1049,6 +1113,13 @@ struct fastrpc_file {
 	struct fastrpc_dspsignal *signal_groups[DSPSIGNAL_NUM_SIGNALS / DSPSIGNAL_GROUP_SIZE];
 	spinlock_t dspsignals_lock;
 	struct mutex signal_create_mutex;
+	struct completion shutdown;
+	/* Flag to indicate Notif feature to be enabled or no */
+	bool init_notif;
+	/* Flag to indicate notif thread exit requested*/
+	bool exit_notif;
+	/* Flag to indicate async thread exit requested*/
+	bool exit_async;
 };
 
 union fastrpc_ioctl_param {
@@ -1088,7 +1159,10 @@ int fastrpc_internal_mem_unmap(struct fastrpc_file *fl,
 				struct fastrpc_ioctl_mem_unmap *ud);
 
 int fastrpc_internal_mmap(struct fastrpc_file *fl,
-				 struct fastrpc_ioctl_mmap *ud);
+		struct fastrpc_ioctl_mmap *ud);
+
+int fastrpc_internal_munmap_fd(struct fastrpc_file *fl,
+				struct fastrpc_ioctl_munmap_fd *ud);
 
 int fastrpc_init_process(struct fastrpc_file *fl,
 				struct fastrpc_ioctl_init_attrs *uproc);
@@ -1120,5 +1194,7 @@ int fastrpc_dspsignal_destroy(struct fastrpc_file *fl,
 int fastrpc_dspsignal_cancel_wait(struct fastrpc_file *fl,
 				  struct fastrpc_ioctl_dspsignal_cancel_wait *cancel);
 
+void fastrpc_rproc_trace_events(const char *name, const char *event,
+				const char *subevent);
 
 #endif

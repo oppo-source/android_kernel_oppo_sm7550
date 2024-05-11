@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"UCSI: %s: " fmt, __func__
 
+#include <clocksource/arm_arch_timer.h>
 #include <linux/device.h>
 #include <linux/ipc_logging.h>
 #include <linux/module.h>
@@ -94,6 +96,13 @@ struct ucsi_dev {
 	atomic_t			state;
 };
 
+struct remoteproc_ts {
+	u32	hh;
+	u32	mm;
+	u32	ss;
+	u32	dec;
+};
+
 static void *ucsi_ipc_log;
 static RAW_NOTIFIER_HEAD(ucsi_glink_notifier);
 
@@ -137,18 +146,35 @@ static char *offset_to_name(unsigned int offset)
 	return type;
 }
 
+#define CLK_FREQ_KHZ		19200
+
+static void get_remoteproc_timestamp(struct remoteproc_ts *ts)
+{
+	u64 us = (arch_timer_read_counter() * 1000 / CLK_FREQ_KHZ);
+	u64 ss = div64_u64(us, 1000000);
+
+	ts->dec = (u32)(us - (ss * 1000000llu));
+	ts->hh = (u32)div64_u64(ss, 3600);
+	ts->mm = (u32)(div64_u64(ss, 60) - (ts->hh * 60));
+	ts->ss = (u32)(ss - (ts->hh * 3600 + ts->mm * 60));
+}
+
 static void ucsi_log(const char *prefix, unsigned int offset, u8 *buf,
 				size_t len)
 {
 	char str[UCSI_LOG_BUF_SIZE] = { 0 };
 	u32 i, pos = 0;
+	struct remoteproc_ts ts;
+
+	get_remoteproc_timestamp(&ts);
 
 	for (i = 0; i < len && pos < sizeof(str) - 1; i++)
 		pos += scnprintf(str + pos, sizeof(str) - pos, "%02x ", buf[i]);
 
 	str[pos] = '\0';
 
-	ucsi_dbg("%s %s %s\n", prefix, offset_to_name(offset), str);
+	ucsi_dbg("%s %s %s (%02u:%02u:%02u.%06u)\n", prefix, offset_to_name(offset),
+			str, ts.hh, ts.mm, ts.ss, ts.dec);
 }
 
 static int handle_ucsi_read_ack(struct ucsi_dev *udev, void *data, size_t len)
@@ -250,9 +276,12 @@ static int ucsi_callback(void *priv, void *data, size_t len)
 {
 	struct pmic_glink_hdr *hdr = data;
 	struct ucsi_dev *udev = priv;
+	struct remoteproc_ts ts;
 
-	pr_debug("owner: %u type: %u opcode: %u len:%zu\n", hdr->owner,
-		hdr->type, hdr->opcode, len);
+	get_remoteproc_timestamp(&ts);
+
+	ucsi_dbg("owner: %u type: %u opcode: %u len:%zu (%02u:%02u:%02u.%06u)\n", hdr->owner,
+		hdr->type, hdr->opcode, len, ts.hh, ts.mm, ts.ss, ts.dec);
 
 	if (hdr->opcode == UC_UCSI_READ_BUF_REQ)
 		handle_ucsi_read_ack(udev, data, len);
@@ -394,12 +423,6 @@ static void ucsi_qti_notify_work(struct work_struct *work)
 					struct constat_info_entry, node);
 		list_del(&entry->node);
 		mutex_unlock(&udev->notify_lock);
-		pr_debug("acc: %d usb: %d alt_mode: %d change: %d connect: %d\n",
-			entry->constat_info.acc,
-			entry->constat_info.partner_usb,
-			entry->constat_info.partner_alternate_mode,
-			entry->constat_info.partner_change,
-			entry->constat_info.connect);
 		raw_notifier_call_chain(&ucsi_glink_notifier,
 					0, &entry->constat_info);
 		kfree(entry);
@@ -411,7 +434,7 @@ static void ucsi_qti_notify_work(struct work_struct *work)
 static void ucsi_qti_notify(struct ucsi_dev *udev, unsigned int offset,
 			    struct ucsi_connector_status *status, size_t len)
 {
-	u8 conn_partner_type, conn_partner_flag;
+	u8 conn_partner_type;
 	bool cmd_requested;
 	struct constat_info_entry *entry;
 
@@ -428,15 +451,6 @@ static void ucsi_qti_notify(struct ucsi_dev *udev, unsigned int offset,
 			return;
 
 		INIT_LIST_HEAD(&entry->node);
-		entry->constat_info.partner_usb = false;
-		entry->constat_info.partner_alternate_mode = false;
-
-		entry->constat_info.partner_change =
-				status->change & UCSI_CONSTAT_PARTNER_CHANGE;
-
-		entry->constat_info.connect =
-				status->flags & UCSI_CONSTAT_CONNECTED;
-
 		conn_partner_type = UCSI_CONSTAT_PARTNER_TYPE(status->flags);
 
 		switch (conn_partner_type) {
@@ -446,23 +460,10 @@ static void ucsi_qti_notify(struct ucsi_dev *udev, unsigned int offset,
 		case UCSI_CONSTAT_PARTNER_TYPE_DEBUG:
 			entry->constat_info.acc = TYPEC_ACCESSORY_DEBUG;
 			break;
-		case UCSI_CONSTAT_PARTNER_TYPE_UFP:
-		case UCSI_CONSTAT_PARTNER_TYPE_CABLE:
-		case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
-		case UCSI_CONSTAT_PARTNER_TYPE_DFP:
-			entry->constat_info.partner_usb = true;
-			fallthrough;
 		default:
 			entry->constat_info.acc = TYPEC_ACCESSORY_NONE;
 			break;
 		}
-
-		conn_partner_flag = UCSI_CONSTAT_PARTNER_FLAGS(status->flags);
-		if (conn_partner_flag & UCSI_CONSTAT_PARTNER_FLAG_USB)
-			entry->constat_info.partner_usb = true;
-
-		if (conn_partner_flag & UCSI_CONSTAT_PARTNER_FLAG_ALT_MODE)
-			entry->constat_info.partner_alternate_mode = true;
 
 		mutex_lock(&udev->notify_lock);
 		list_add_tail(&entry->node, &udev->constat_info_list);

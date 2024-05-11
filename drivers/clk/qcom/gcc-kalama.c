@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -17,6 +18,7 @@
 #include "clk-alpha-pll.h"
 #include "clk-branch.h"
 #include "clk-pll.h"
+#include "clk-pm.h"
 #include "clk-rcg.h"
 #include "clk-regmap.h"
 #include "clk-regmap-divider.h"
@@ -890,6 +892,7 @@ static const struct freq_tbl ftbl_gcc_qupv3_wrap1_s0_clk_src[] = {
 	F(29491200, P_GCC_GPLL0_OUT_EVEN, 1, 1536, 15625),
 	F(32000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 75),
 	F(48000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 25),
+	F(51200000, P_GCC_GPLL0_OUT_EVEN, 1, 64, 375),
 	F(64000000, P_GCC_GPLL0_OUT_EVEN, 1, 16, 75),
 	F(75000000, P_GCC_GPLL0_OUT_EVEN, 4, 0, 0),
 	F(80000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 15),
@@ -963,6 +966,7 @@ static const struct freq_tbl ftbl_gcc_qupv3_wrap1_s2_clk_src[] = {
 	F(29491200, P_GCC_GPLL0_OUT_EVEN, 1, 1536, 15625),
 	F(32000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 75),
 	F(48000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 25),
+	F(51200000, P_GCC_GPLL0_OUT_EVEN, 1, 64, 375),
 	F(64000000, P_GCC_GPLL0_OUT_EVEN, 1, 16, 75),
 	F(75000000, P_GCC_GPLL0_OUT_EVEN, 4, 0, 0),
 	F(80000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 15),
@@ -1302,11 +1306,16 @@ static const struct freq_tbl ftbl_gcc_qupv3_wrap2_s6_clk_src[] = {
 	F(29491200, P_GCC_GPLL0_OUT_EVEN, 1, 1536, 15625),
 	F(32000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 75),
 	F(48000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 25),
+	F(51200000, P_GCC_GPLL0_OUT_EVEN, 1, 64, 375),
 	F(64000000, P_GCC_GPLL0_OUT_EVEN, 1, 16, 75),
 	F(75000000, P_GCC_GPLL0_OUT_EVEN, 4, 0, 0),
 	F(80000000, P_GCC_GPLL0_OUT_EVEN, 1, 4, 15),
 	F(96000000, P_GCC_GPLL0_OUT_EVEN, 1, 8, 25),
 	F(100000000, P_GCC_GPLL0_OUT_MAIN, 6, 0, 0),
+	F(102400000, P_GCC_GPLL0_OUT_EVEN, 1, 128, 375),
+	F(112000000, P_GCC_GPLL0_OUT_EVEN, 1, 28, 75),
+	F(117964800, P_GCC_GPLL0_OUT_EVEN, 1, 6144, 15625),
+	F(120000000, P_GCC_GPLL0_OUT_MAIN, 5, 0, 0),
 	F(125000000, P_GCC_GPLL0_OUT_MAIN, 1, 5, 24),
 	{ }
 };
@@ -1375,6 +1384,16 @@ static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src[] = {
 	{ }
 };
 
+static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src_kalama_v2[] = {
+	F(400000, P_BI_TCXO, 12, 1, 4),
+	F(25000000, P_GCC_GPLL0_OUT_EVEN, 12, 0, 0),
+	F(37500000, P_GCC_GPLL0_OUT_EVEN, 8, 0, 0),
+	F(50000000, P_GCC_GPLL0_OUT_EVEN, 6, 0, 0),
+	F(100000000, P_GCC_GPLL0_OUT_EVEN, 3, 0, 0),
+	F(202000000, P_GCC_GPLL9_OUT_MAIN, 4, 0, 0),
+	{ }
+};
+
 static struct clk_rcg2 gcc_sdcc2_apps_clk_src = {
 	.cmd_rcgr = 0x14018,
 	.mnd_width = 8,
@@ -1396,7 +1415,7 @@ static struct clk_rcg2 gcc_sdcc2_apps_clk_src = {
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
 			[VDD_LOWER] = 100000000,
-			[VDD_LOW_L1] = 202000000},
+			[VDD_LOW_L1] = 148000000},
 	},
 };
 
@@ -3553,6 +3572,27 @@ static struct clk_branch gcc_video_xo_clk = {
 	},
 };
 
+/*
+ * FORCE_MEM_CORE_ON for ufs phy ice core clocks
+ * gcc_camera_ahb_clk
+ * gcc_camera_xo_clk
+ * gcc_disp_ahb_clk
+ * gcc_disp_xo_clk
+ * gcc_gpu_cfg_ahb_clk
+ * gcc_video_ahb_clk
+ * gcc_video_xo_clk
+ */
+static struct critical_clk_offset critical_clk_list[] = {
+	{ .offset = 0x77074, .mask = BIT(14) },
+	{ .offset = 0x26004, .mask = BIT(0) },
+	{ .offset = 0x26028, .mask = BIT(0) },
+	{ .offset = 0x27004, .mask = BIT(0) },
+	{ .offset = 0x27018, .mask = BIT(0) },
+	{ .offset = 0x71004, .mask = BIT(0) },
+	{ .offset = 0x32004, .mask = BIT(0) },
+	{ .offset = 0x32030, .mask = BIT(0) },
+};
+
 static struct clk_regmap *gcc_kalama_clocks[] = {
 	[GCC_AGGRE_NOC_PCIE_AXI_CLK] = &gcc_aggre_noc_pcie_axi_clk.clkr,
 	[GCC_AGGRE_UFS_PHY_AXI_CLK] = &gcc_aggre_ufs_phy_axi_clk.clkr,
@@ -3792,7 +3832,7 @@ static const struct regmap_config gcc_kalama_regmap_config = {
 	.fast_io = true,
 };
 
-static const struct qcom_cc_desc gcc_kalama_desc = {
+static struct qcom_cc_desc gcc_kalama_desc = {
 	.config = &gcc_kalama_regmap_config,
 	.clks = gcc_kalama_clocks,
 	.num_clks = ARRAY_SIZE(gcc_kalama_clocks),
@@ -3800,13 +3840,37 @@ static const struct qcom_cc_desc gcc_kalama_desc = {
 	.num_resets = ARRAY_SIZE(gcc_kalama_resets),
 	.clk_regulators = gcc_kalama_regulators,
 	.num_clk_regulators = ARRAY_SIZE(gcc_kalama_regulators),
+	.critical_clk_en = critical_clk_list,
+	.num_critical_clk = ARRAY_SIZE(critical_clk_list),
 };
 
 static const struct of_device_id gcc_kalama_match_table[] = {
 	{ .compatible = "qcom,kalama-gcc" },
+	{ .compatible = "qcom,kalama-gcc-v2" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, gcc_kalama_match_table);
+
+static void gcc_kalama_fixup_kalamav2(struct regmap *regmap)
+{
+	gcc_sdcc2_apps_clk_src.freq_tbl = ftbl_gcc_sdcc2_apps_clk_src_kalama_v2;
+	gcc_sdcc2_apps_clk_src.clkr.vdd_data.rate_max[VDD_LOW_L1] = 202000000;
+}
+
+static int gcc_kalama_fixup(struct platform_device *pdev, struct regmap *regmap)
+{
+	const char *compat = NULL;
+	int compatlen = 0;
+
+	compat = of_get_property(pdev->dev.of_node, "compatible", &compatlen);
+	if (!compat || compatlen <= 0)
+		return -EINVAL;
+
+	if (!strcmp(compat, "qcom,kalama-gcc-v2"))
+		gcc_kalama_fixup_kalamav2(regmap);
+
+	return 0;
+}
 
 static int gcc_kalama_probe(struct platform_device *pdev)
 {
@@ -3817,17 +3881,27 @@ static int gcc_kalama_probe(struct platform_device *pdev)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
+
+	ret = gcc_kalama_fixup(pdev, regmap);
+	if (ret)
+		return ret;
+
 	ret = qcom_cc_register_rcg_dfs(regmap, gcc_dfs_clocks,
 				       ARRAY_SIZE(gcc_dfs_clocks));
 	if (ret)
 		return ret;
 
-	/* FORCE_MEM_CORE_ON for ufs phy ice core clocks */
-	regmap_update_bits(regmap, gcc_ufs_phy_ice_core_clk.halt_reg,
-			   BIT(14), BIT(14));
-
 	/* Clear GDSC_SLEEP_ENA_VOTE to stop votes being auto-removed in sleep. */
 	regmap_write(regmap, 0x52024, 0x0);
+
+	ret = register_qcom_clks_pm(pdev, false, &gcc_kalama_desc);
+	if (ret)
+		dev_err(&pdev->dev, "Failed to register for pm ops\n");
+
+	/* Enabling always ON clocks
+	 * FORCE_MEM_CORE_ON for ufs phy ice core clocks
+	 */
+	clk_restore_critical_clocks(&pdev->dev);
 
 	ret = qcom_cc_really_probe(pdev, &gcc_kalama_desc, regmap);
 	if (ret) {

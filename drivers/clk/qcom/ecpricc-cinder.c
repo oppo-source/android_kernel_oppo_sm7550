@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -22,7 +22,6 @@
 #include "clk-regmap-divider.h"
 #include "clk-regmap-mux.h"
 #include "common.h"
-#include "gdsc.h"
 #include "reset.h"
 #include "vdd-level.h"
 
@@ -110,14 +109,14 @@ enum {
 };
 
 static const struct pll_vco lucid_evo_vco[] = {
-	{ 249600000, 2000000000, 0 },
+	{ 249600000, 2020000000, 0 },
 };
 
 /* 625 MHz configuration */
-static const struct alpha_pll_config ecpri_cc_pll0_config = {
-	.l = 0x1F,
+static struct alpha_pll_config ecpri_cc_pll0_config = {
+	.l = 0x20,
 	.cal_l = 0x44,
-	.alpha = 0x4000,
+	.alpha = 0x8D55,
 	.config_ctl_val = 0x20485699,
 	.config_ctl_hi_val = 0x00182261,
 	.config_ctl_hi1_val = 0x32AA299C,
@@ -133,7 +132,7 @@ static struct clk_alpha_pll ecpri_cc_pll0 = {
 	.clkr = {
 		.enable_reg = 0x0,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_pll0",
 			.parent_data = &(const struct clk_parent_data){
 				.fw_name = "bi_tcxo",
@@ -149,17 +148,17 @@ static struct clk_alpha_pll ecpri_cc_pll0 = {
 				[VDD_LOWER] = 615000000,
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
-				[VDD_NOMINAL] = 1750000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_NOMINAL] = 1800000000,
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
 
 /* 806 MHz configuration */
 static const struct alpha_pll_config ecpri_cc_pll1_config = {
-	.l = 0x34,
+	.l = 0x29,
 	.cal_l = 0x44,
-	.alpha = 0x1555,
+	.alpha = 0xFAAA,
 	.config_ctl_val = 0x20485699,
 	.config_ctl_hi_val = 0x00182261,
 	.config_ctl_hi1_val = 0x32AA299C,
@@ -175,7 +174,7 @@ static struct clk_alpha_pll ecpri_cc_pll1 = {
 	.clkr = {
 		.enable_reg = 0x0,
 		.enable_mask = BIT(1),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_pll1",
 			.parent_data = &(const struct clk_parent_data){
 				.fw_name = "bi_tcxo",
@@ -191,8 +190,8 @@ static struct clk_alpha_pll ecpri_cc_pll1 = {
 				[VDD_LOWER] = 615000000,
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
-				[VDD_NOMINAL] = 1750000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_NOMINAL] = 1800000000,
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -767,7 +766,7 @@ static struct clk_regmap_mux ecpri_cc_eth_phy_0_ock_sram_mux_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_3,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_0_ock_sram_mux_clk_src",
 			.parent_data = ecpri_cc_parent_data_3,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_3),
@@ -782,7 +781,7 @@ static struct clk_regmap_mux ecpri_cc_eth_phy_1_ock_sram_mux_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_4,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_1_ock_sram_mux_clk_src",
 			.parent_data = ecpri_cc_parent_data_4,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_4),
@@ -797,7 +796,7 @@ static struct clk_regmap_mux ecpri_cc_eth_phy_2_ock_sram_mux_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_5,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_2_ock_sram_mux_clk_src",
 			.parent_data = ecpri_cc_parent_data_5,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_5),
@@ -812,7 +811,7 @@ static struct clk_regmap_mux ecpri_cc_eth_phy_3_ock_sram_mux_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_6,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_3_ock_sram_mux_clk_src",
 			.parent_data = ecpri_cc_parent_data_6,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_6),
@@ -827,7 +826,7 @@ static struct clk_regmap_mux ecpri_cc_eth_phy_4_ock_sram_mux_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_7,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_4_ock_sram_mux_clk_src",
 			.parent_data = ecpri_cc_parent_data_7,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_7),
@@ -842,7 +841,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane0_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_8,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane0_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_8,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_8),
@@ -857,7 +856,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane0_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_9,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane0_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_9,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_9),
@@ -872,7 +871,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane1_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_10,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane1_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_10,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_10),
@@ -887,7 +886,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane1_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_11,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane1_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_11,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_11),
@@ -902,7 +901,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane2_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_12,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane2_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_12,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_12),
@@ -917,7 +916,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane2_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_13,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane2_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_13,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_13),
@@ -932,7 +931,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane3_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_14,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane3_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_14,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_14),
@@ -947,7 +946,7 @@ static struct clk_regmap_mux ecpri_cc_phy0_lane3_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_15,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane3_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_15,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_15),
@@ -962,7 +961,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane0_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_16,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane0_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_16,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_16),
@@ -977,7 +976,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane0_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_17,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane0_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_17,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_17),
@@ -992,7 +991,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane1_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_18,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane1_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_18,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_18),
@@ -1007,7 +1006,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane1_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_19,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane1_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_19,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_19),
@@ -1022,7 +1021,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane2_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_20,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane2_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_20,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_20),
@@ -1037,7 +1036,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane2_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_21,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane2_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_21,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_21),
@@ -1052,7 +1051,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane3_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_22,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane3_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_22,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_22),
@@ -1067,7 +1066,7 @@ static struct clk_regmap_mux ecpri_cc_phy1_lane3_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_23,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane3_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_23,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_23),
@@ -1082,7 +1081,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane0_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_24,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane0_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_24,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_24),
@@ -1097,7 +1096,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane0_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_25,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane0_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_25,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_25),
@@ -1112,7 +1111,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane1_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_26,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane1_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_26,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_26),
@@ -1127,7 +1126,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane1_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_27,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane1_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_27,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_27),
@@ -1142,7 +1141,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane2_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_28,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane2_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_28,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_28),
@@ -1157,7 +1156,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane2_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_29,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane2_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_29,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_29),
@@ -1172,7 +1171,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane3_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_30,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane3_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_30,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_30),
@@ -1187,7 +1186,7 @@ static struct clk_regmap_mux ecpri_cc_phy2_lane3_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_31,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane3_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_31,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_31),
@@ -1202,7 +1201,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane0_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_32,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane0_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_32,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_32),
@@ -1217,7 +1216,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane0_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_33,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane0_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_33,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_33),
@@ -1232,7 +1231,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane1_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_34,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane1_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_34,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_34),
@@ -1247,7 +1246,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane1_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_35,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane1_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_35,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_35),
@@ -1262,7 +1261,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane2_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_36,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane2_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_36,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_36),
@@ -1277,7 +1276,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane2_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_37,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane2_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_37,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_37),
@@ -1292,7 +1291,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane3_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_38,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane3_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_38,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_38),
@@ -1307,7 +1306,7 @@ static struct clk_regmap_mux ecpri_cc_phy3_lane3_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_39,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane3_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_39,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_39),
@@ -1322,7 +1321,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane0_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_40,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane0_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_40,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_40),
@@ -1337,7 +1336,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane0_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_41,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane0_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_41,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_41),
@@ -1352,7 +1351,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane1_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_42,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane1_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_42,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_42),
@@ -1367,7 +1366,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane1_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_43,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane1_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_43,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_43),
@@ -1382,7 +1381,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane2_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_44,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane2_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_44,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_44),
@@ -1397,7 +1396,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane2_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_45,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane2_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_45,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_45),
@@ -1412,7 +1411,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane3_rx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_46,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane3_rx_clk_src",
 			.parent_data = ecpri_cc_parent_data_46,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_46),
@@ -1427,7 +1426,7 @@ static struct clk_regmap_mux ecpri_cc_phy4_lane3_tx_clk_src = {
 	.width = 2,
 	.parent_map = ecpri_cc_parent_map_47,
 	.clkr = {
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane3_tx_clk_src",
 			.parent_data = ecpri_cc_parent_data_47,
 			.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_47),
@@ -1451,6 +1450,33 @@ static struct clk_regmap_mux ecpri_cc_emac_synce_cmux_clk_src = {
 	},
 };
 
+static struct clk_dummy ecpri_cc_emac_synce_cmux_clk = {
+	.rrate = 1000,
+	.hw.init = &(struct clk_init_data){
+		.name = "ecpri_cc_emac_synce_cmux_clk",
+		.parent_hws = (const struct clk_hw*[]){
+			&ecpri_cc_emac_synce_cmux_clk_src.clkr.hw,
+		},
+		.num_parents = 1,
+		.flags = CLK_SET_RATE_PARENT,
+		.ops = &clk_dummy_ops,
+	},
+};
+
+static struct clk_regmap_div ecpri_cc_emac_synce_div_clk_src = {
+	.reg = 0xc000,
+	.shift = 0,
+	.width = 4,
+	.clkr.hw.init = &(const struct clk_init_data) {
+		.name = "ecpri_cc_emac_synce_div_clk_src",
+		.parent_hws = (const struct clk_hw*[]){
+			&ecpri_cc_emac_synce_cmux_clk.hw,
+		},
+		.num_parents = 1,
+		.ops = &clk_regmap_div_ops,
+	},
+};
+
 static const struct freq_tbl ftbl_ecpri_cc_ecpri_clk_src[] = {
 	F(466500000, P_GCC_ECPRI_CC_GPLL5_OUT_EVEN, 1, 0, 0),
 	{ }
@@ -1463,7 +1489,7 @@ static struct clk_rcg2 ecpri_cc_ecpri_clk_src = {
 	.parent_map = ecpri_cc_parent_map_2,
 	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_ecpri_clk_src",
 		.parent_data = ecpri_cc_parent_data_2,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_2),
@@ -1490,7 +1516,7 @@ static struct clk_rcg2 ecpri_cc_ecpri_dma_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_ecpri_dma_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_ecpri_dma_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1518,7 +1544,7 @@ static struct clk_rcg2 ecpri_cc_ecpri_fast_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_ecpri_fast_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_ecpri_fast_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1545,7 +1571,7 @@ static struct clk_rcg2 ecpri_cc_ecpri_oran_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_ecpri_oran_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_ecpri_oran_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1559,14 +1585,21 @@ static struct clk_rcg2 ecpri_cc_ecpri_oran_clk_src = {
 	},
 };
 
+static const struct freq_tbl ftbl_ecpri_cc_eth_100g_c2c0_hm_ff_clk_src[] = {
+	F(201500000, P_ECPRI_CC_PLL1_OUT_MAIN, 4, 0, 0),
+	F(403000000, P_ECPRI_CC_PLL1_OUT_MAIN, 2, 0, 0),
+	F(466500000, P_GCC_ECPRI_CC_GPLL5_OUT_EVEN, 1, 0, 0),
+	{ }
+};
+
 static struct clk_rcg2 ecpri_cc_eth_100g_c2c0_hm_ff_clk_src = {
 	.cmd_rcgr = 0x81b0,
 	.mnd_width = 0,
 	.hid_width = 5,
 	.parent_map = ecpri_cc_parent_map_0,
-	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
+	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c0_hm_ff_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_c2c0_hm_ff_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1582,6 +1615,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_c2c0_hm_ff_clk_src = {
 
 static const struct freq_tbl ftbl_ecpri_cc_eth_100g_c2c_hm_macsec_clk_src[] = {
 	F(19200000, P_BI_TCXO, 1, 0, 0),
+	F(100000000, P_GCC_ECPRI_CC_GPLL0_OUT_MAIN, 6, 0, 0),
 	F(200000000, P_GCC_ECPRI_CC_GPLL0_OUT_MAIN, 3, 0, 0),
 	{ }
 };
@@ -1593,7 +1627,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_c2c_hm_macsec_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c_hm_macsec_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_c2c_hm_macsec_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1612,9 +1646,9 @@ static struct clk_rcg2 ecpri_cc_eth_100g_dbg_c2c_hm_ff_clk_src = {
 	.mnd_width = 0,
 	.hid_width = 5,
 	.parent_map = ecpri_cc_parent_map_0,
-	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
+	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c0_hm_ff_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_dbg_c2c_hm_ff_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1633,9 +1667,9 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh0_hm_ff_clk_src = {
 	.mnd_width = 0,
 	.hid_width = 5,
 	.parent_map = ecpri_cc_parent_map_0,
-	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
+	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c0_hm_ff_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh0_hm_ff_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1649,14 +1683,20 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh0_hm_ff_clk_src = {
 	},
 };
 
+static const struct freq_tbl ftbl_ecpri_cc_eth_100g_fh0_macsec_clk_src[] = {
+	F(100000000, P_GCC_ECPRI_CC_GPLL0_OUT_MAIN, 6, 0, 0),
+	F(200000000, P_GCC_ECPRI_CC_GPLL0_OUT_MAIN, 3, 0, 0),
+	{ }
+};
+
 static struct clk_rcg2 ecpri_cc_eth_100g_fh0_macsec_clk_src = {
 	.cmd_rcgr = 0x8108,
 	.mnd_width = 0,
 	.hid_width = 5,
 	.parent_map = ecpri_cc_parent_map_0,
-	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c_hm_macsec_clk_src,
+	.freq_tbl = ftbl_ecpri_cc_eth_100g_fh0_macsec_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh0_macsec_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1677,7 +1717,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh1_hm_ff_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh1_hm_ff_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1698,7 +1738,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh1_macsec_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c_hm_macsec_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh1_macsec_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1717,9 +1757,9 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh2_hm_ff_clk_src = {
 	.mnd_width = 0,
 	.hid_width = 5,
 	.parent_map = ecpri_cc_parent_map_0,
-	.freq_tbl = ftbl_ecpri_cc_ecpri_clk_src,
+	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c0_hm_ff_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh2_hm_ff_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1740,7 +1780,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh2_macsec_clk_src = {
 	.parent_map = ecpri_cc_parent_map_0,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_c2c_hm_macsec_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_fh2_macsec_clk_src",
 		.parent_data = ecpri_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_0),
@@ -1755,6 +1795,8 @@ static struct clk_rcg2 ecpri_cc_eth_100g_fh2_macsec_clk_src = {
 };
 
 static const struct freq_tbl ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src[] = {
+	F(533000000, P_GCC_ECPRI_CC_GPLL1_OUT_EVEN, 1, 0, 0),
+	F(700000000, P_GCC_ECPRI_CC_GPLL3_OUT_MAIN, 1, 0, 0),
 	F(806000000, P_GCC_ECPRI_CC_GPLL4_OUT_MAIN, 1, 0, 0),
 	{ }
 };
@@ -1766,7 +1808,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src = {
 	.parent_map = ecpri_cc_parent_map_1,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src",
 		.parent_data = ecpri_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_1),
@@ -1787,7 +1829,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_mac_dbg_c2c_hm_ref_clk_src = {
 	.parent_map = ecpri_cc_parent_map_1,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_mac_dbg_c2c_hm_ref_clk_src",
 		.parent_data = ecpri_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_1),
@@ -1808,7 +1850,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_mac_fh0_hm_ref_clk_src = {
 	.parent_map = ecpri_cc_parent_map_1,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_mac_fh0_hm_ref_clk_src",
 		.parent_data = ecpri_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_1),
@@ -1829,7 +1871,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_mac_fh1_hm_ref_clk_src = {
 	.parent_map = ecpri_cc_parent_map_1,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_mac_fh1_hm_ref_clk_src",
 		.parent_data = ecpri_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_1),
@@ -1850,7 +1892,7 @@ static struct clk_rcg2 ecpri_cc_eth_100g_mac_fh2_hm_ref_clk_src = {
 	.parent_map = ecpri_cc_parent_map_1,
 	.freq_tbl = ftbl_ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_eth_100g_mac_fh2_hm_ref_clk_src",
 		.parent_data = ecpri_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_1),
@@ -1876,7 +1918,7 @@ static struct clk_rcg2 ecpri_cc_mss_emac_clk_src = {
 	.parent_map = ecpri_cc_parent_map_2,
 	.freq_tbl = ftbl_ecpri_cc_mss_emac_clk_src,
 	.enable_safe_config = true,
-	.clkr.hw.init = &(struct clk_init_data){
+	.clkr.hw.init = &(const struct clk_init_data){
 		.name = "ecpri_cc_mss_emac_clk_src",
 		.parent_data = ecpri_cc_parent_data_2,
 		.num_parents = ARRAY_SIZE(ecpri_cc_parent_data_2),
@@ -1894,7 +1936,7 @@ static struct clk_regmap_div ecpri_cc_ecpri_fast_div2_clk_src = {
 	.reg = 0x907c,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_ecpri_fast_div2_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_ecpri_fast_clk_src.clkr.hw,
@@ -1909,7 +1951,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_c2c_hm_ff_0_div_clk_src = {
 	.reg = 0x8290,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_c2c_hm_ff_0_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_c2c0_hm_ff_clk_src.clkr.hw,
@@ -1924,7 +1966,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_c2c_hm_ff_1_div_clk_src = {
 	.reg = 0x8294,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_c2c_hm_ff_1_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_c2c0_hm_ff_clk_src.clkr.hw,
@@ -1939,7 +1981,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_dbg_c2c_hm_ff_0_div_clk_src = {
 	.reg = 0x8298,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_dbg_c2c_hm_ff_0_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_dbg_c2c_hm_ff_clk_src.clkr.hw,
@@ -1954,7 +1996,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_dbg_c2c_hm_ff_1_div_clk_src = {
 	.reg = 0x829c,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_dbg_c2c_hm_ff_1_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_dbg_c2c_hm_ff_clk_src.clkr.hw,
@@ -1969,7 +2011,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_0_hm_ff_0_div_clk_src = {
 	.reg = 0x8260,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_0_hm_ff_0_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh0_hm_ff_clk_src.clkr.hw,
@@ -1984,7 +2026,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_0_hm_ff_1_div_clk_src = {
 	.reg = 0x8264,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_0_hm_ff_1_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh0_hm_ff_clk_src.clkr.hw,
@@ -1999,7 +2041,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_0_hm_ff_2_div_clk_src = {
 	.reg = 0x8268,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_0_hm_ff_2_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh0_hm_ff_clk_src.clkr.hw,
@@ -2014,7 +2056,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_0_hm_ff_3_div_clk_src = {
 	.reg = 0x826c,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_0_hm_ff_3_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh0_hm_ff_clk_src.clkr.hw,
@@ -2029,7 +2071,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_1_hm_ff_0_div_clk_src = {
 	.reg = 0x8270,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_1_hm_ff_0_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh1_hm_ff_clk_src.clkr.hw,
@@ -2044,7 +2086,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_1_hm_ff_1_div_clk_src = {
 	.reg = 0x8274,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_1_hm_ff_1_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh1_hm_ff_clk_src.clkr.hw,
@@ -2059,7 +2101,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_1_hm_ff_2_div_clk_src = {
 	.reg = 0x8278,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_1_hm_ff_2_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh1_hm_ff_clk_src.clkr.hw,
@@ -2074,7 +2116,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_1_hm_ff_3_div_clk_src = {
 	.reg = 0x827c,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_1_hm_ff_3_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh1_hm_ff_clk_src.clkr.hw,
@@ -2089,7 +2131,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_2_hm_ff_0_div_clk_src = {
 	.reg = 0x8280,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_2_hm_ff_0_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh2_hm_ff_clk_src.clkr.hw,
@@ -2104,7 +2146,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_2_hm_ff_1_div_clk_src = {
 	.reg = 0x8284,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_2_hm_ff_1_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh2_hm_ff_clk_src.clkr.hw,
@@ -2119,7 +2161,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_2_hm_ff_2_div_clk_src = {
 	.reg = 0x8288,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_2_hm_ff_2_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh2_hm_ff_clk_src.clkr.hw,
@@ -2134,7 +2176,7 @@ static struct clk_regmap_div ecpri_cc_eth_100g_fh_2_hm_ff_3_div_clk_src = {
 	.reg = 0x828c,
 	.shift = 0,
 	.width = 4,
-	.clkr.hw.init = &(struct clk_init_data) {
+	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "ecpri_cc_eth_100g_fh_2_hm_ff_3_div_clk_src",
 		.parent_hws = (const struct clk_hw*[]){
 			&ecpri_cc_eth_100g_fh2_hm_ff_clk_src.clkr.hw,
@@ -2151,7 +2193,7 @@ static struct clk_branch ecpri_cc_ecpri_cg_clk = {
 	.clkr = {
 		.enable_reg = 0x900c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_cg_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2169,7 +2211,7 @@ static struct clk_branch ecpri_cc_ecpri_dma_clk = {
 	.clkr = {
 		.enable_reg = 0x902c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_dma_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_dma_clk_src.clkr.hw,
@@ -2187,7 +2229,7 @@ static struct clk_branch ecpri_cc_ecpri_dma_noc_clk = {
 	.clkr = {
 		.enable_reg = 0xf004,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_dma_noc_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_dma_clk_src.clkr.hw,
@@ -2205,7 +2247,7 @@ static struct clk_branch ecpri_cc_ecpri_fast_clk = {
 	.clkr = {
 		.enable_reg = 0x9014,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_fast_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_fast_clk_src.clkr.hw,
@@ -2223,7 +2265,7 @@ static struct clk_branch ecpri_cc_ecpri_fast_div2_clk = {
 	.clkr = {
 		.enable_reg = 0x901c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_fast_div2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_fast_div2_clk_src.clkr.hw,
@@ -2241,7 +2283,7 @@ static struct clk_branch ecpri_cc_ecpri_fast_div2_noc_clk = {
 	.clkr = {
 		.enable_reg = 0xf008,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_fast_div2_noc_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_fast_div2_clk_src.clkr.hw,
@@ -2259,7 +2301,7 @@ static struct clk_branch ecpri_cc_ecpri_fr_clk = {
 	.clkr = {
 		.enable_reg = 0x9004,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_fr_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2277,7 +2319,7 @@ static struct clk_branch ecpri_cc_ecpri_oran_div2_clk = {
 	.clkr = {
 		.enable_reg = 0x9024,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_ecpri_oran_div2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_oran_clk_src.clkr.hw,
@@ -2295,7 +2337,7 @@ static struct clk_branch ecpri_cc_eth_100g_c2c0_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x80cc,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_c2c0_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2313,7 +2355,7 @@ static struct clk_branch ecpri_cc_eth_100g_c2c1_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x80d0,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_c2c1_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2334,7 +2376,7 @@ static struct clk_branch ecpri_cc_eth_100g_c2c_0_hm_ff_0_clk = {
 	.clkr = {
 		.enable_reg = 0x80b4,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_c2c_0_hm_ff_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_c2c_hm_ff_0_div_clk_src.clkr.hw,
@@ -2355,7 +2397,7 @@ static struct clk_branch ecpri_cc_eth_100g_c2c_0_hm_ff_1_clk = {
 	.clkr = {
 		.enable_reg = 0x80bc,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_c2c_0_hm_ff_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_c2c_hm_ff_1_div_clk_src.clkr.hw,
@@ -2376,7 +2418,7 @@ static struct clk_branch ecpri_cc_eth_100g_c2c_hm_macsec_clk = {
 	.clkr = {
 		.enable_reg = 0x80ac,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_c2c_hm_macsec_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_c2c_hm_macsec_clk_src.clkr.hw,
@@ -2397,7 +2439,7 @@ static struct clk_branch ecpri_cc_eth_100g_dbg_c2c_hm_ff_0_clk = {
 	.clkr = {
 		.enable_reg = 0x80d8,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_dbg_c2c_hm_ff_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_dbg_c2c_hm_ff_0_div_clk_src.clkr.hw,
@@ -2418,7 +2460,7 @@ static struct clk_branch ecpri_cc_eth_100g_dbg_c2c_hm_ff_1_clk = {
 	.clkr = {
 		.enable_reg = 0x80e0,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_dbg_c2c_hm_ff_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_dbg_c2c_hm_ff_1_div_clk_src.clkr.hw,
@@ -2436,7 +2478,7 @@ static struct clk_branch ecpri_cc_eth_100g_dbg_c2c_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x80f0,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_dbg_c2c_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2457,7 +2499,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_0_hm_ff_0_clk = {
 	.clkr = {
 		.enable_reg = 0x800c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_0_hm_ff_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_0_hm_ff_0_div_clk_src.clkr.hw,
@@ -2478,7 +2520,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_0_hm_ff_1_clk = {
 	.clkr = {
 		.enable_reg = 0x8014,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_0_hm_ff_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_0_hm_ff_1_div_clk_src.clkr.hw,
@@ -2499,7 +2541,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_0_hm_ff_2_clk = {
 	.clkr = {
 		.enable_reg = 0x801c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_0_hm_ff_2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_0_hm_ff_2_div_clk_src.clkr.hw,
@@ -2520,7 +2562,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_0_hm_ff_3_clk = {
 	.clkr = {
 		.enable_reg = 0x8024,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_0_hm_ff_3_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_0_hm_ff_3_div_clk_src.clkr.hw,
@@ -2538,7 +2580,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_0_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x8034,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_0_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2559,7 +2601,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_1_hm_ff_0_clk = {
 	.clkr = {
 		.enable_reg = 0x8044,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_1_hm_ff_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_1_hm_ff_0_div_clk_src.clkr.hw,
@@ -2580,7 +2622,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_1_hm_ff_1_clk = {
 	.clkr = {
 		.enable_reg = 0x804c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_1_hm_ff_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_1_hm_ff_1_div_clk_src.clkr.hw,
@@ -2601,7 +2643,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_1_hm_ff_2_clk = {
 	.clkr = {
 		.enable_reg = 0x8054,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_1_hm_ff_2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_1_hm_ff_2_div_clk_src.clkr.hw,
@@ -2622,7 +2664,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_1_hm_ff_3_clk = {
 	.clkr = {
 		.enable_reg = 0x805c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_1_hm_ff_3_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_1_hm_ff_3_div_clk_src.clkr.hw,
@@ -2640,7 +2682,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_1_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x806c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_1_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2661,7 +2703,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_2_hm_ff_0_clk = {
 	.clkr = {
 		.enable_reg = 0x807c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_2_hm_ff_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_2_hm_ff_0_div_clk_src.clkr.hw,
@@ -2682,7 +2724,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_2_hm_ff_1_clk = {
 	.clkr = {
 		.enable_reg = 0x8084,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_2_hm_ff_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_2_hm_ff_1_div_clk_src.clkr.hw,
@@ -2703,7 +2745,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_2_hm_ff_2_clk = {
 	.clkr = {
 		.enable_reg = 0x808c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_2_hm_ff_2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_2_hm_ff_2_div_clk_src.clkr.hw,
@@ -2724,7 +2766,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_2_hm_ff_3_clk = {
 	.clkr = {
 		.enable_reg = 0x8094,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_2_hm_ff_3_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh_2_hm_ff_3_div_clk_src.clkr.hw,
@@ -2742,7 +2784,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_2_udp_fifo_clk = {
 	.clkr = {
 		.enable_reg = 0x80a4,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_2_udp_fifo_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_clk_src.clkr.hw,
@@ -2763,7 +2805,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_macsec_0_clk = {
 	.clkr = {
 		.enable_reg = 0x8004,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_macsec_0_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh0_macsec_clk_src.clkr.hw,
@@ -2784,7 +2826,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_macsec_1_clk = {
 	.clkr = {
 		.enable_reg = 0x803c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_macsec_1_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh1_macsec_clk_src.clkr.hw,
@@ -2805,7 +2847,7 @@ static struct clk_branch ecpri_cc_eth_100g_fh_macsec_2_clk = {
 	.clkr = {
 		.enable_reg = 0x8074,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_fh_macsec_2_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_fh2_macsec_clk_src.clkr.hw,
@@ -2826,7 +2868,7 @@ static struct clk_branch ecpri_cc_eth_100g_mac_c2c_hm_ref_clk = {
 	.clkr = {
 		.enable_reg = 0x80c4,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_mac_c2c_hm_ref_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_mac_c2c_hm_ref_clk_src.clkr.hw,
@@ -2847,7 +2889,7 @@ static struct clk_branch ecpri_cc_eth_100g_mac_dbg_c2c_hm_ref_clk = {
 	.clkr = {
 		.enable_reg = 0x80e8,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_mac_dbg_c2c_hm_ref_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_mac_dbg_c2c_hm_ref_clk_src.clkr.hw,
@@ -2868,7 +2910,7 @@ static struct clk_branch ecpri_cc_eth_100g_mac_fh0_hm_ref_clk = {
 	.clkr = {
 		.enable_reg = 0x802c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_mac_fh0_hm_ref_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_mac_fh0_hm_ref_clk_src.clkr.hw,
@@ -2889,7 +2931,7 @@ static struct clk_branch ecpri_cc_eth_100g_mac_fh1_hm_ref_clk = {
 	.clkr = {
 		.enable_reg = 0x8064,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_mac_fh1_hm_ref_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_mac_fh1_hm_ref_clk_src.clkr.hw,
@@ -2910,7 +2952,7 @@ static struct clk_branch ecpri_cc_eth_100g_mac_fh2_hm_ref_clk = {
 	.clkr = {
 		.enable_reg = 0x809c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_100g_mac_fh2_hm_ref_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_100g_mac_fh2_hm_ref_clk_src.clkr.hw,
@@ -2928,7 +2970,7 @@ static struct clk_branch ecpri_cc_eth_dbg_nfapi_axi_clk = {
 	.clkr = {
 		.enable_reg = 0x80f4,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_dbg_nfapi_axi_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_dma_clk_src.clkr.hw,
@@ -2946,7 +2988,7 @@ static struct clk_branch ecpri_cc_eth_dbg_noc_axi_clk = {
 	.clkr = {
 		.enable_reg = 0x80fc,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_dbg_noc_axi_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_mss_emac_clk_src.clkr.hw,
@@ -2967,7 +3009,7 @@ static struct clk_branch ecpri_cc_eth_phy_0_ock_sram_clk = {
 	.clkr = {
 		.enable_reg = 0xd140,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_0_ock_sram_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_phy_0_ock_sram_mux_clk_src.clkr.hw,
@@ -2988,7 +3030,7 @@ static struct clk_branch ecpri_cc_eth_phy_1_ock_sram_clk = {
 	.clkr = {
 		.enable_reg = 0xd148,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_1_ock_sram_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_phy_1_ock_sram_mux_clk_src.clkr.hw,
@@ -3009,7 +3051,7 @@ static struct clk_branch ecpri_cc_eth_phy_2_ock_sram_clk = {
 	.clkr = {
 		.enable_reg = 0xd150,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_2_ock_sram_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_phy_2_ock_sram_mux_clk_src.clkr.hw,
@@ -3026,11 +3068,11 @@ static struct clk_branch ecpri_cc_eth_phy_3_ock_sram_clk = {
 	.halt_check = BRANCH_HALT,
 	.mem_enable_reg = 0x8410,
 	.mem_ack_reg = 0x8424,
-	.mem_enable_ack_bit = BIT(5),
+	.mem_enable_ack_bit = BIT(6),
 	.clkr = {
 		.enable_reg = 0xd158,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_3_ock_sram_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_phy_3_ock_sram_mux_clk_src.clkr.hw,
@@ -3051,7 +3093,7 @@ static struct clk_branch ecpri_cc_eth_phy_4_ock_sram_clk = {
 	.clkr = {
 		.enable_reg = 0xd160,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_eth_phy_4_ock_sram_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_eth_phy_4_ock_sram_mux_clk_src.clkr.hw,
@@ -3069,7 +3111,7 @@ static struct clk_branch ecpri_cc_mss_emac_clk = {
 	.clkr = {
 		.enable_reg = 0xe008,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_mss_emac_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_mss_emac_clk_src.clkr.hw,
@@ -3087,7 +3129,7 @@ static struct clk_branch ecpri_cc_mss_oran_clk = {
 	.clkr = {
 		.enable_reg = 0xe004,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_mss_oran_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_ecpri_oran_clk_src.clkr.hw,
@@ -3105,7 +3147,7 @@ static struct clk_branch ecpri_cc_phy0_lane0_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd000,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane0_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane0_rx_clk_src.clkr.hw,
@@ -3123,7 +3165,7 @@ static struct clk_branch ecpri_cc_phy0_lane0_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd050,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane0_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane0_tx_clk_src.clkr.hw,
@@ -3141,7 +3183,7 @@ static struct clk_branch ecpri_cc_phy0_lane1_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd004,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane1_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane1_rx_clk_src.clkr.hw,
@@ -3159,7 +3201,7 @@ static struct clk_branch ecpri_cc_phy0_lane1_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd054,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane1_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane1_tx_clk_src.clkr.hw,
@@ -3177,7 +3219,7 @@ static struct clk_branch ecpri_cc_phy0_lane2_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd008,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane2_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane2_rx_clk_src.clkr.hw,
@@ -3195,7 +3237,7 @@ static struct clk_branch ecpri_cc_phy0_lane2_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd058,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane2_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane2_tx_clk_src.clkr.hw,
@@ -3213,7 +3255,7 @@ static struct clk_branch ecpri_cc_phy0_lane3_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd00c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane3_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane3_rx_clk_src.clkr.hw,
@@ -3231,7 +3273,7 @@ static struct clk_branch ecpri_cc_phy0_lane3_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd05c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy0_lane3_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy0_lane3_tx_clk_src.clkr.hw,
@@ -3249,7 +3291,7 @@ static struct clk_branch ecpri_cc_phy1_lane0_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd010,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane0_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane0_rx_clk_src.clkr.hw,
@@ -3267,7 +3309,7 @@ static struct clk_branch ecpri_cc_phy1_lane0_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd060,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane0_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane0_tx_clk_src.clkr.hw,
@@ -3285,7 +3327,7 @@ static struct clk_branch ecpri_cc_phy1_lane1_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd014,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane1_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane1_rx_clk_src.clkr.hw,
@@ -3303,7 +3345,7 @@ static struct clk_branch ecpri_cc_phy1_lane1_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd064,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane1_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane1_tx_clk_src.clkr.hw,
@@ -3321,7 +3363,7 @@ static struct clk_branch ecpri_cc_phy1_lane2_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd018,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane2_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane2_rx_clk_src.clkr.hw,
@@ -3339,7 +3381,7 @@ static struct clk_branch ecpri_cc_phy1_lane2_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd068,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane2_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane2_tx_clk_src.clkr.hw,
@@ -3357,7 +3399,7 @@ static struct clk_branch ecpri_cc_phy1_lane3_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd01c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane3_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane3_rx_clk_src.clkr.hw,
@@ -3375,7 +3417,7 @@ static struct clk_branch ecpri_cc_phy1_lane3_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd06c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy1_lane3_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy1_lane3_tx_clk_src.clkr.hw,
@@ -3393,7 +3435,7 @@ static struct clk_branch ecpri_cc_phy2_lane0_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd020,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane0_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane0_rx_clk_src.clkr.hw,
@@ -3411,7 +3453,7 @@ static struct clk_branch ecpri_cc_phy2_lane0_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd070,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane0_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane0_tx_clk_src.clkr.hw,
@@ -3429,7 +3471,7 @@ static struct clk_branch ecpri_cc_phy2_lane1_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd024,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane1_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane1_rx_clk_src.clkr.hw,
@@ -3447,7 +3489,7 @@ static struct clk_branch ecpri_cc_phy2_lane1_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd074,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane1_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane1_tx_clk_src.clkr.hw,
@@ -3465,7 +3507,7 @@ static struct clk_branch ecpri_cc_phy2_lane2_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd028,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane2_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane2_rx_clk_src.clkr.hw,
@@ -3483,7 +3525,7 @@ static struct clk_branch ecpri_cc_phy2_lane2_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd078,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane2_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane2_tx_clk_src.clkr.hw,
@@ -3501,7 +3543,7 @@ static struct clk_branch ecpri_cc_phy2_lane3_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd02c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane3_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane3_rx_clk_src.clkr.hw,
@@ -3519,7 +3561,7 @@ static struct clk_branch ecpri_cc_phy2_lane3_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd07c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy2_lane3_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy2_lane3_tx_clk_src.clkr.hw,
@@ -3537,7 +3579,7 @@ static struct clk_branch ecpri_cc_phy3_lane0_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd030,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane0_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane0_rx_clk_src.clkr.hw,
@@ -3555,7 +3597,7 @@ static struct clk_branch ecpri_cc_phy3_lane0_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd080,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane0_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane0_tx_clk_src.clkr.hw,
@@ -3573,7 +3615,7 @@ static struct clk_branch ecpri_cc_phy3_lane1_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd034,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane1_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane1_rx_clk_src.clkr.hw,
@@ -3591,7 +3633,7 @@ static struct clk_branch ecpri_cc_phy3_lane1_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd084,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane1_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane1_tx_clk_src.clkr.hw,
@@ -3609,7 +3651,7 @@ static struct clk_branch ecpri_cc_phy3_lane2_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd038,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane2_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane2_rx_clk_src.clkr.hw,
@@ -3627,7 +3669,7 @@ static struct clk_branch ecpri_cc_phy3_lane2_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd088,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane2_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane2_tx_clk_src.clkr.hw,
@@ -3645,7 +3687,7 @@ static struct clk_branch ecpri_cc_phy3_lane3_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd03c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane3_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane3_rx_clk_src.clkr.hw,
@@ -3663,7 +3705,7 @@ static struct clk_branch ecpri_cc_phy3_lane3_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd08c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy3_lane3_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy3_lane3_tx_clk_src.clkr.hw,
@@ -3681,7 +3723,7 @@ static struct clk_branch ecpri_cc_phy4_lane0_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd040,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane0_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane0_rx_clk_src.clkr.hw,
@@ -3699,7 +3741,7 @@ static struct clk_branch ecpri_cc_phy4_lane0_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd090,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane0_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane0_tx_clk_src.clkr.hw,
@@ -3717,7 +3759,7 @@ static struct clk_branch ecpri_cc_phy4_lane1_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd044,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane1_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane1_rx_clk_src.clkr.hw,
@@ -3735,7 +3777,7 @@ static struct clk_branch ecpri_cc_phy4_lane1_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd094,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane1_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane1_tx_clk_src.clkr.hw,
@@ -3753,7 +3795,7 @@ static struct clk_branch ecpri_cc_phy4_lane2_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd048,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane2_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane2_rx_clk_src.clkr.hw,
@@ -3771,7 +3813,7 @@ static struct clk_branch ecpri_cc_phy4_lane2_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd098,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane2_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane2_tx_clk_src.clkr.hw,
@@ -3789,7 +3831,7 @@ static struct clk_branch ecpri_cc_phy4_lane3_rx_clk = {
 	.clkr = {
 		.enable_reg = 0xd04c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane3_rx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane3_rx_clk_src.clkr.hw,
@@ -3807,7 +3849,7 @@ static struct clk_branch ecpri_cc_phy4_lane3_tx_clk = {
 	.clkr = {
 		.enable_reg = 0xd09c,
 		.enable_mask = BIT(0),
-		.hw.init = &(struct clk_init_data){
+		.hw.init = &(const struct clk_init_data){
 			.name = "ecpri_cc_phy4_lane3_tx_clk",
 			.parent_hws = (const struct clk_hw*[]){
 				&ecpri_cc_phy4_lane3_tx_clk_src.clkr.hw,
@@ -4007,8 +4049,13 @@ static struct clk_regmap *ecpri_cc_cinder_clocks[] = {
 	[ECPRI_CC_PHY4_LANE3_TX_CLK] = &ecpri_cc_phy4_lane3_tx_clk.clkr,
 	[ECPRI_CC_PHY4_LANE3_TX_CLK_SRC] = &ecpri_cc_phy4_lane3_tx_clk_src.clkr,
 	[ECPRI_CC_EMAC_SYNCE_CMUX_CLK_SRC] = &ecpri_cc_emac_synce_cmux_clk_src.clkr,
+	[ECPRI_CC_EMAC_SYNCE_DIV_CLK_SRC] = &ecpri_cc_emac_synce_div_clk_src.clkr,
 	[ECPRI_CC_PLL0] = &ecpri_cc_pll0.clkr,
 	[ECPRI_CC_PLL1] = &ecpri_cc_pll1.clkr,
+};
+
+static struct clk_hw *ecpri_cc_cinder_hws[] = {
+	[ECPRI_CC_EMAC_SYNCE_CMUX_CLK] = &ecpri_cc_emac_synce_cmux_clk.hw,
 };
 
 static const struct qcom_reset_map ecpri_cc_cinder_resets[] = {
@@ -4020,6 +4067,7 @@ static const struct qcom_reset_map ecpri_cc_cinder_resets[] = {
 	[ECPRI_CC_CLK_CTL_TOP_ECPRI_CC_ETH_WRAPPER_TOP_BCR] = { 0x8104 },
 	[ECPRI_CC_CLK_CTL_TOP_ECPRI_CC_MODEM_BCR] = { 0xe000 },
 	[ECPRI_CC_CLK_CTL_TOP_ECPRI_CC_NOC_BCR] = { 0xf000 },
+	[ECPRI_CC_CLK_CTL_TOP_ECPRI_CC_EMAC_SYNCE_ACGCR] = { 0x1c004 },
 };
 
 static const struct regmap_config ecpri_cc_cinder_regmap_config = {
@@ -4034,6 +4082,8 @@ static const struct qcom_cc_desc ecpri_cc_cinder_desc = {
 	.config = &ecpri_cc_cinder_regmap_config,
 	.clks = ecpri_cc_cinder_clocks,
 	.num_clks = ARRAY_SIZE(ecpri_cc_cinder_clocks),
+	.clk_hws = ecpri_cc_cinder_hws,
+	.num_clk_hws = ARRAY_SIZE(ecpri_cc_cinder_hws),
 	.resets = ecpri_cc_cinder_resets,
 	.num_resets = ARRAY_SIZE(ecpri_cc_cinder_resets),
 	.clk_regulators = ecpri_cc_cinder_regulators,
@@ -4042,9 +4092,23 @@ static const struct qcom_cc_desc ecpri_cc_cinder_desc = {
 
 static const struct of_device_id ecpri_cc_cinder_match_table[] = {
 	{ .compatible = "qcom,cinder-ecpricc" },
+	{ .compatible = "qcom,cinder-ecpricc-v2" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ecpri_cc_cinder_match_table);
+
+static int ecpri_cc_cinder_fixup(struct platform_device *pdev, struct regmap *regmap)
+{
+	if (of_device_is_compatible(pdev->dev.of_node, "qcom,cinder-ecpricc-v2")) {
+		/* 700 MHz configuration */
+		ecpri_cc_pll0_config.l = 0x24;
+		ecpri_cc_pll0_config.alpha = 0x7555;
+
+		ecpri_cc_emac_synce_div_clk_src.width = 9;
+	}
+
+	return 0;
+}
 
 static int ecpri_cc_cinder_probe(struct platform_device *pdev)
 {
@@ -4054,6 +4118,10 @@ static int ecpri_cc_cinder_probe(struct platform_device *pdev)
 	regmap = qcom_cc_map(pdev, &ecpri_cc_cinder_desc);
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
+
+	ret = ecpri_cc_cinder_fixup(pdev, regmap);
+	if (ret)
+		return ret;
 
 	clk_lucid_evo_pll_configure(&ecpri_cc_pll0, regmap, &ecpri_cc_pll0_config);
 	clk_lucid_evo_pll_configure(&ecpri_cc_pll1, regmap, &ecpri_cc_pll1_config);

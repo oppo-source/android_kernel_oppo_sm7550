@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021-2021 Qualcomm Innovation Center, Inc. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
@@ -9,7 +9,17 @@
 #include <trace/hooks/sched.h>
 #include <walt.h>
 #include "trace.h"
-
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_TASK_SCHED)
+#include <../kernel/oplus_cpu/sched/task_sched/task_sched_info.h>
+#endif
+#ifdef CONFIG_OPLUS_ADD_CORE_CTRL_MASK
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+#include <../kernel/oplus_cpu/sched/frame_boost/frame_group.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_fair.h>
+#endif
+#endif /* CONFIG_OPLUS_ADD_CORE_CTRL_MASK */
 #ifdef CONFIG_HOTPLUG_CPU
 
 /* if a cpu is halting */
@@ -20,7 +30,7 @@ static DEFINE_RAW_SPINLOCK(halt_lock);
 
 struct halt_cpu_state {
 	u64		last_halt;
-	int		ref_count;
+	u8		reason;
 };
 
 static DEFINE_PER_CPU(struct halt_cpu_state, halt_state);
@@ -40,7 +50,7 @@ void
 detach_one_task_core(struct task_struct *p, struct rq *rq,
 		     struct list_head *tasks)
 {
-	lockdep_assert_held(&rq->__lock);
+	walt_lockdep_assert_rq(rq, p);
 
 	p->on_rq = TASK_ON_RQ_MIGRATING;
 	deactivate_task(rq, p, 0);
@@ -51,7 +61,7 @@ void attach_tasks_core(struct list_head *tasks, struct rq *rq)
 {
 	struct task_struct *p;
 
-	lockdep_assert_held(&rq->__lock);
+	walt_lockdep_assert_rq(rq, NULL);
 
 	while (!list_empty(tasks)) {
 		p = list_first_entry(tasks, struct task_struct, se.group_node);
@@ -176,13 +186,27 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf)
 	rq->stop = stop;
 }
 
+void __balance_callbacks(struct rq *rq);
+
 static int drain_rq_cpu_stop(void *data)
 {
 	struct rq *rq = this_rq();
 	struct rq_flags rf;
+	struct walt_rq *wrq = (struct walt_rq *) rq->android_vendor_data1;
 
 	rq_lock_irqsave(rq, &rf);
 	migrate_tasks(rq, &rf);
+
+	/*
+	 * service any callbacks that were accumulated, prior to unlocking. such that
+	 * any subsequent calls to rq_lock... will see an rq->balance_callback set to
+	 * the default (0 or balance_push_callback);
+	 */
+	wrq->enqueue_counter = 0;
+	__balance_callbacks(rq);
+	if (wrq->enqueue_counter)
+		WALT_BUG(WALT_BUG_WALT, NULL, "cpu: %d task was re-enqueued", cpu_of(rq));
+
 	rq_unlock_irqrestore(rq, &rf);
 
 	return 0;
@@ -271,7 +295,9 @@ static int halt_cpus(struct cpumask *cpus)
 
 	for_each_cpu(cpu, cpus) {
 
-		if (cpu == cpumask_first(system_32bit_el0_cpumask())) {
+		if ((cpumask_empty(system_32bit_el0_cpumask()) &&
+			(cpu == cpumask_first(cpu_possible_mask))) ||
+		    (cpu == cpumask_first(system_32bit_el0_cpumask()))) {
 			ret = -EINVAL;
 			goto out;
 		}
@@ -292,10 +318,12 @@ static int halt_cpus(struct cpumask *cpus)
 	cpumask_or(&drain_data.cpus_to_drain, &drain_data.cpus_to_drain, cpus);
 	raw_spin_unlock_irqrestore(&walt_drain_pending_lock, flags);
 
-	if (!IS_ERR(walt_drain_thread))
-		wake_up_process(walt_drain_thread);
+	wake_up_process(walt_drain_thread);
 
 out:
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_TASK_SCHED)
+	update_cpus_isolate_info(cpus, cpu_isolate);
+#endif
 	trace_halt_cpus(cpus, start_time, 1, ret);
 
 	return ret;
@@ -325,28 +353,29 @@ static int start_cpus(struct cpumask *cpus)
 		/* kick the cpu so it can pull tasks
 		 * after the mask has been cleared.
 		 */
-		walt_kick_cpu(cpu);
+		walt_smp_call_newidle_balance(cpu);
 	}
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_TASK_SCHED)
+        update_cpus_isolate_info(cpus, cpu_unisolate);
+#endif
 	trace_halt_cpus(cpus, start_time, 0, 0);
 
 	return 0;
 }
 
-/* increment/decrement ref count for cpus in yield/halt mask */
-static void update_ref_counts(struct cpumask *cpus, bool halt)
+/* update reason for cpus in yield/halt mask */
+static void update_reasons(struct cpumask *cpus, bool halt, enum pause_reason reason)
 {
 	int cpu;
 	struct halt_cpu_state *halt_cpu_state;
 
 	for_each_cpu(cpu, cpus) {
 		halt_cpu_state = per_cpu_ptr(&halt_state, cpu);
-		if (halt) {
-			halt_cpu_state->ref_count++;
-		} else {
-			WARN_ON_ONCE(halt_cpu_state->ref_count == 0);
-			halt_cpu_state->ref_count--;
-		}
+		if (halt)
+			halt_cpu_state->reason |=  reason;
+		else
+			halt_cpu_state->reason &= ~reason;
 	}
 }
 
@@ -358,13 +387,13 @@ static void update_halt_cpus(struct cpumask *cpus)
 
 	for_each_cpu(cpu, cpus) {
 		halt_cpu_state = per_cpu_ptr(&halt_state, cpu);
-		if (halt_cpu_state->ref_count)
+		if (halt_cpu_state->reason)
 			cpumask_clear_cpu(cpu, cpus);
 	}
 }
 
 /* cpus will be modified */
-int walt_halt_cpus(struct cpumask *cpus)
+int walt_halt_cpus(struct cpumask *cpus, enum pause_reason reason)
 {
 	int ret = 0;
 	cpumask_t requested_cpus;
@@ -378,7 +407,7 @@ int walt_halt_cpus(struct cpumask *cpus)
 	update_halt_cpus(cpus);
 
 	if (cpumask_empty(cpus)) {
-		update_ref_counts(&requested_cpus, true);
+		update_reasons(&requested_cpus, true, reason);
 		goto unlock;
 	}
 
@@ -388,21 +417,23 @@ int walt_halt_cpus(struct cpumask *cpus)
 		pr_debug("halt_cpus failure ret=%d cpus=%*pbl\n", ret,
 			 cpumask_pr_args(&requested_cpus));
 	else
-		update_ref_counts(&requested_cpus, true);
+		update_reasons(&requested_cpus, true, reason);
 unlock:
 	raw_spin_unlock_irqrestore(&halt_lock, flags);
 
 	return ret;
 }
 
-int walt_pause_cpus(struct cpumask *cpus)
+int walt_pause_cpus(struct cpumask *cpus, enum pause_reason reason)
 {
-	return walt_halt_cpus(cpus);
+	if (walt_disabled)
+		return -EAGAIN;
+	return walt_halt_cpus(cpus, reason);
 }
 EXPORT_SYMBOL(walt_pause_cpus);
 
 /* cpus will be modified */
-int walt_start_cpus(struct cpumask *cpus)
+int walt_start_cpus(struct cpumask *cpus, enum pause_reason reason)
 {
 	int ret = 0;
 	cpumask_t requested_cpus;
@@ -410,9 +441,9 @@ int walt_start_cpus(struct cpumask *cpus)
 
 	raw_spin_lock_irqsave(&halt_lock, flags);
 	cpumask_copy(&requested_cpus, cpus);
-	update_ref_counts(&requested_cpus, false);
+	update_reasons(&requested_cpus, false, reason);
 
-	/* remove cpus that should still be halted, due to ref-counts */
+	/* remove cpus that should still be halted */
 	update_halt_cpus(cpus);
 
 	ret = start_cpus(cpus);
@@ -421,7 +452,7 @@ int walt_start_cpus(struct cpumask *cpus)
 		pr_debug("halt_cpus failure ret=%d cpus=%*pbl\n", ret,
 			 cpumask_pr_args(&requested_cpus));
 		/* restore/increment ref counts in case of error */
-		update_ref_counts(&requested_cpus, true);
+		update_reasons(&requested_cpus, true, reason);
 	}
 
 	raw_spin_unlock_irqrestore(&halt_lock, flags);
@@ -429,9 +460,11 @@ int walt_start_cpus(struct cpumask *cpus)
 	return ret;
 }
 
-int walt_resume_cpus(struct cpumask *cpus)
+int walt_resume_cpus(struct cpumask *cpus, enum pause_reason reason)
 {
-	return walt_start_cpus(cpus);
+	if (walt_disabled)
+		return -EAGAIN;
+	return walt_start_cpus(cpus, reason);
 }
 EXPORT_SYMBOL(walt_resume_cpus);
 
@@ -488,23 +521,42 @@ unlock:
 	rcu_read_unlock();
 }
 
-static void android_rvh_set_cpus_allowed_ptr_locked(void *unused,
+/**
+ * android_rvh_set_cpus_allowed_by_task: disallow cpus that are halted
+ *
+ * NOTES: may be called if migration is disabled for the task
+ *        if per-cpu-kthread, must not deliberately return an invalid cpu
+ *        if !per-cpu-kthread, may return an invalid cpu (reject dest_cpu)
+ *        must not change cpu in in_exec 32bit task case
+ */
+static void android_rvh_set_cpus_allowed_by_task(void *unused,
 						    const struct cpumask *cpu_valid_mask,
 						    const struct cpumask *new_mask,
+						    struct task_struct *p,
 						    unsigned int *dest_cpu)
 {
-	cpumask_t allowed_cpus;
-
 	if (unlikely(walt_disabled))
 		return;
 
-	if (cpu_halted(*dest_cpu)) {
+	/* allow kthreads to change affinity regardless of halt status of dest_cpu */
+	if (p->flags & PF_KTHREAD)
+		return;
+
+	if (cpu_halted(*dest_cpu) && !p->migration_disabled) {
+		cpumask_t allowed_cpus;
+
+		if (unlikely(is_compat_thread(task_thread_info(p)) && p->in_execve))
+			return;
+
 		/* remove halted cpus from the valid mask, and store locally */
 		cpumask_andnot(&allowed_cpus, cpu_valid_mask, cpu_halt_mask);
 		*dest_cpu = cpumask_any_and_distribute(&allowed_cpus, new_mask);
 	}
 }
 
+/**
+ * android_rvh_rto_next-cpu: disallow halted cpus for irq workfunctions
+ */
 static void android_rvh_rto_next_cpu(void *unused, int rto_cpu, struct cpumask *rto_mask, int *cpu)
 {
 	cpumask_t allowed_cpus;
@@ -522,10 +574,7 @@ static void android_rvh_rto_next_cpu(void *unused, int rto_cpu, struct cpumask *
 /**
  * android_rvh_is_cpu_allowed: disallow cpus that are halted
  *
- * Caveat: For 32 bit tasks that are being directed to a halted cpu, allow the halted cpu
- *         in a particular case (32 bit task, in execve, moving to a 32 bit cpu)
- *         This is to handle the call to is_cpu_allowed() from __migrate_task, in the
- *         event that a 32bit task is being execve'd.
+ * NOTE: this function will not be called if migration is disabled for the task.
  */
 static void android_rvh_is_cpu_allowed(void *unused, struct task_struct *p, int cpu, bool *allowed)
 {
@@ -560,9 +609,28 @@ void walt_halt_init(void)
 
 	sched_setscheduler_nocheck(walt_drain_thread, SCHED_FIFO, &param);
 
+#ifdef CONFIG_OPLUS_ADD_CORE_CTRL_MASK
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	init_fbg_halt_mask(&__cpu_halt_mask);
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	init_ux_halt_mask(&__cpu_halt_mask);
+#endif
+#endif /* CONFIG_OPLUS_ADD_CORE_CTRL_MASK */
+
+	/*
+	 * disable hotplug of first cpu for a symmetric system (all or none of the cores
+	 * supporting 32bit).
+	 */
+	if (cpumask_empty(system_32bit_el0_cpumask()) ||
+		    (cpumask_weight(cpu_possible_mask) ==
+			     cpumask_weight(system_32bit_el0_cpumask())))
+		get_cpu_device(cpumask_first(cpu_possible_mask))->offline_disabled = true;
+
 	register_trace_android_rvh_get_nohz_timer_target(android_rvh_get_nohz_timer_target, NULL);
-	register_trace_android_rvh_set_cpus_allowed_ptr_locked(
-						android_rvh_set_cpus_allowed_ptr_locked, NULL);
+	register_trace_android_rvh_set_cpus_allowed_by_task(
+						android_rvh_set_cpus_allowed_by_task, NULL);
 	register_trace_android_rvh_rto_next_cpu(android_rvh_rto_next_cpu, NULL);
 	register_trace_android_rvh_is_cpu_allowed(android_rvh_is_cpu_allowed, NULL);
 

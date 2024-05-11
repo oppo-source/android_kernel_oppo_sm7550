@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef UFS_QCOM_H_
@@ -10,6 +11,8 @@
 #include <linux/phy/phy.h>
 #include <linux/pm_qos.h>
 #include <linux/notifier.h>
+#include <linux/proc_fs.h>
+#include <linux/panic_notifier.h>
 #include "ufshcd.h"
 #include "unipro.h"
 
@@ -29,15 +32,37 @@
 #define UFS_HW_VER_STEP_SHFT	(0)
 #define UFS_HW_VER_STEP_MASK	(0xFFFF << UFS_HW_VER_STEP_SHFT)
 
+/*
+ * UFS_MEM_DEBUG_SPARE_CFG[0:3] = UFS device's minor version
+ * UFS_MEM_DEBUG_SPARE_CFG[4:7] = UFS device's major version
+ */
+#define UFS_DEVICE_VER_MAJOR_SHFT (4)
+#define UFS_DEVICE_VER_MAJOR_MASK  (0x000F << UFS_DEVICE_VER_MAJOR_SHFT)
+#define UFS_DEVICE_VER_MINOR_MASK 0x000F
+
 #define UFS_VENDOR_MICRON	0x12C
 
 #define SLOW 1
 #define FAST 2
 
+/* CPU Clusters Info */
+enum cpu_cluster_info {
+	SILVER_CORE,
+	GOLD_CORE,
+	GOLD_PRIME_CORE,
+	MAX_NUM_CLUSTERS,
+};
+
 enum ufs_qcom_phy_submode {
 	UFS_QCOM_PHY_SUBMODE_NON_G4,
 	UFS_QCOM_PHY_SUBMODE_G4,
 	UFS_QCOM_PHY_SUBMODE_G5,
+};
+
+enum ufs_qcom_ber_mode {
+	UFS_QCOM_BER_MODE_G1_G4,
+	UFS_QCOM_BER_MODE_G5,
+	UFS_QCOM_BER_MODE_MAX,
 };
 
 #define UFS_QCOM_LIMIT_NUM_LANES_RX	2
@@ -53,6 +78,7 @@ enum ufs_qcom_phy_submode {
 #define UFS_QCOM_LIMIT_HS_RATE		PA_HS_MODE_B
 #define UFS_QCOM_LIMIT_DESIRED_MODE	FAST
 #define UFS_QCOM_LIMIT_PHY_SUBMODE	UFS_QCOM_PHY_SUBMODE_G4
+#define UFS_MEM_REG_PA_ERR_CODE	0xCC
 
 /* default value of auto suspend is 3 seconds */
 #define UFS_QCOM_AUTO_SUSPEND_DELAY	3000
@@ -85,6 +111,7 @@ enum {
 	 */
 	UFS_AH8_CFG				= 0xFC,
 	UFS_MEM_ICE				= 0x2600,
+	REG_UFS_DEBUG_SPARE_CFG			= 0x284C,
 };
 
 /* QCOM UFS host controller vendor specific debug registers */
@@ -167,6 +194,132 @@ enum {
 #define UFS_QCOM_MAX_HS_GEAR(x) (((x) & UFS_MAX_HS_GEAR_MASK) >>\
 				 UFS_MAX_HS_GEAR_SHIFT)
 
+/*define ufs uic error code*/
+/*feature-flashaging806-v001-1-begin*/
+enum unipro_pa_errCode {
+	UNIPRO_PA_LANE0_ERR_CNT,
+	UNIPRO_PA_LANE1_ERR_CNT,
+	UNIPRO_PA_LANE2_ERR_CNT,
+	UNIPRO_PA_LANE3_ERR_CNT,
+	UNIPRO_PA_LINE_RESET,
+	UNIPRO_PA_ERR_MAX
+};
+
+enum unipro_dl_errCode {
+	UNIPRO_DL_NAC_RECEIVED,
+	UNIPRO_DL_TCX_REPLAY_TIMER_EXPIRED,
+	UNIPRO_DL_AFCX_REQUEST_TIMER_EXPIRED,
+	UNIPRO_DL_FCX_PROTECTION_TIMER_EXPIRED,
+	UNIPRO_DL_CRC_ERROR,
+	UNIPRO_DL_RX_BUFFER_OVERFLOW,
+	UNIPRO_DL_MAX_FRAME_LENGTH_EXCEEDED,
+	UNIPRO_DL_WRONG_SEQUENCE_NUMBER,
+	UNIPRO_DL_AFC_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_NAC_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_EOF_SYNTAX_ERROR,
+	UNIPRO_DL_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_BAD_CTRL_SYMBOL_TYPE,
+	UNIPRO_DL_PA_INIT_ERROR,
+	UNIPRO_DL_PA_ERROR_IND_RECEIVED,
+	UNIPRO_DL_PA_INIT,
+	UNIPRO_DL_ERR_MAX
+};
+
+enum unipro_nl_errCode {
+	UNIPRO_NL_UNSUPPORTED_HEADER_TYPE,
+	UNIPRO_NL_BAD_DEVICEID_ENC,
+	UNIPRO_NL_LHDR_TRAP_PACKET_DROPPING,
+	UNIPRO_NL_ERR_MAX
+};
+
+enum unipro_tl_errCode {
+	UNIPRO_TL_UNSUPPORTED_HEADER_TYPE,
+	UNIPRO_TL_UNKNOWN_CPORTID,
+	UNIPRO_TL_NO_CONNECTION_RX,
+	UNIPRO_TL_CONTROLLED_SEGMENT_DROPPING,
+	UNIPRO_TL_BAD_TC,
+	UNIPRO_TL_E2E_CREDIT_OVERFLOW,
+	UNIPRO_TL_SAFETY_VALVE_DROPPING,
+	UNIPRO_TL_ERR_MAX
+};
+
+enum unipro_dme_errCode {
+	UNIPRO_DME_GENERIC,
+	UNIPRO_DME_TX_QOS,
+	UNIPRO_DME_RX_QOS,
+	UNIPRO_DME_PA_INIT_QOS,
+	UNIPRO_DME_ERR_MAX
+};
+
+struct ufs_transmission_status_t
+{
+	u8  transmission_status_enable;
+
+	u64 gear_min_write_sec;
+	u64 gear_max_write_sec;
+	u64 gear_min_read_sec;
+	u64 gear_max_read_sec;
+
+	u64 gear_min_write_us;
+	u64 gear_max_write_us;
+	u64 gear_min_read_us;
+	u64 gear_max_read_us;
+
+	u64 gear_min_dev_us;
+	u64 gear_max_dev_us;
+
+	u64 gear_min_other_sec;
+	u64 gear_max_other_sec;
+	u64 gear_min_other_us;
+	u64 gear_max_other_us;
+
+	u64 scsi_send_count;
+	u64 dev_cmd_count;
+
+	u64 active_count;
+	u64 active_time;
+	u64 resume_timing;
+
+	u64 sleep_count;
+	u64 sleep_time;
+	u64 suspend_timing;
+
+	u64 powerdown_count;
+	u64 powerdown_time;
+
+	u64 power_total_count;
+	u32 current_pwr_mode;
+};
+
+struct signal_quality {
+	u32 ufs_device_err_cnt;
+	u32 ufs_host_err_cnt;
+	u32 ufs_bus_err_cnt;
+	u32 ufs_crypto_err_cnt;
+	u32 ufs_link_lost_cnt;
+	u32 unipro_PA_err_total_cnt;
+	u32 unipro_PA_err_cnt[UNIPRO_PA_ERR_MAX];
+	u32 unipro_DL_err_total_cnt;
+	u32 unipro_DL_err_cnt[UNIPRO_DL_ERR_MAX];
+	u32 unipro_NL_err_total_cnt;
+	u32 unipro_NL_err_cnt[UNIPRO_NL_ERR_MAX];
+	u32 unipro_TL_err_total_cnt;
+	u32 unipro_TL_err_cnt[UNIPRO_TL_ERR_MAX];
+	u32 unipro_DME_err_total_cnt;
+	u32 unipro_DME_err_cnt[UNIPRO_DME_ERR_MAX];
+	u32 gear_err_cnt[UFS_HS_G5 + 1];
+};
+
+struct unipro_signal_quality_ctrl {
+	struct proc_dir_entry *ctrl_dir;
+	struct signal_quality record;
+	struct signal_quality record_upload;
+};
+
+/*bsp.storage.ufs 2023.9.04 add for recordGearErr.*/
+void recordGearErr(struct unipro_signal_quality_ctrl *signalCtrl, struct ufs_hba *hba);
+
+/*feature-flashaging806-v001-1-end*/
 /* bit offset */
 enum {
 	OFFSET_UFS_PHY_SOFT_RESET           = 1,
@@ -235,6 +388,16 @@ enum ufs_qcom_phy_init_type {
  * Enable this quirk to give it an additional 100us.
  */
 #define UFS_DEVICE_QUIRK_PA_HIBER8TIME          (1 << 15)
+
+/*
+ * Some ufs device vendors need a different TSync length.
+ * Enable this quirk to give an additional TX_HS_SYNC_LENGTH.
+ */
+#define UFS_DEVICE_QUIRK_PA_TX_HSG1_SYNC_LENGTH (1 << 16)
+#define UFS_DEVICE_QUIRK_PA_TX_HSG4_SYNC_LENGTH (1 << 17)
+
+/* UECPA - Host UIC Error Code Data Link Layer */
+#define UIC_DATA_LINK_LAYER_EC_PA_ERROR_IND_RECEIVED	0x4000
 
 static inline void
 ufs_qcom_get_controller_revision(struct ufs_hba *hba,
@@ -424,6 +587,43 @@ static inline void get_alg2_grp_params(unsigned int group, int *core, int *task)
 	 __get_alg2_grp_params(p->val, core, task);
 }
 
+/**
+ * struct ufs_qcom_ber_hist - record the detail of each BER event.
+ * @pos: index of event.
+ * @uec_pa: PA error type.
+ * @err_code: error code, only needed for PA error.
+ * @gear: the gear info when PHY PA occurs.
+ * @tstamp: record timestamp.
+ * @run_time: valid running time since last event.
+ * @full_time: total time since last event.
+ * @cnt: total error count.
+ * @name: mode name.
+ */
+struct ufs_qcom_ber_hist {
+	#define UFS_QCOM_EVT_LEN    32
+	int pos;
+	u32 uec_pa[UFS_QCOM_EVT_LEN];
+	u32 err_code[UFS_QCOM_EVT_LEN];
+	u32 gear[UFS_QCOM_EVT_LEN];
+	ktime_t tstamp[UFS_QCOM_EVT_LEN];
+	s64 run_time[UFS_QCOM_EVT_LEN];
+	s64 full_time[UFS_QCOM_EVT_LEN];
+	u32 cnt;
+	char *name;
+};
+
+struct ufs_qcom_ber_table {
+	enum ufs_qcom_ber_mode mode;
+	u32 ber_threshold;
+};
+
+struct ufs_qcom_regs {
+	struct list_head list;
+	const char *prefix;
+	u32 *ptr;
+	size_t len;
+};
+
 struct ufs_qcom_host {
 	/*
 	 * Set this capability if host controller supports the QUniPro mode
@@ -476,6 +676,7 @@ struct ufs_qcom_host {
 	void __iomem *ice_hwkm_mmio;
 #endif
 
+	bool reset_in_progress;
 	u32 dev_ref_clk_en_mask;
 
 	/* Bitmask for enabling debug prints */
@@ -504,6 +705,7 @@ struct ufs_qcom_host {
 
 	struct ufs_vreg *vddp_ref_clk;
 	struct ufs_vreg *vccq_parent;
+	struct ufs_vreg *vccq_shutdown;
 	bool work_pending;
 	bool bypass_g4_cfgready;
 	bool is_dt_pm_level_read;
@@ -518,11 +720,14 @@ struct ufs_qcom_host {
 	atomic_t scale_up;
 	atomic_t clks_on;
 	unsigned long load_delay_ms;
-#define NUM_REQS_HIGH_THRESH 64
+#define NUM_REQS_JUDGE_THRESH 100
+#define REQS_JUDGE_SHORT_TIME 50000000
+#define REQS_JUDGE_LONG_TIME 150000000
+
 #define NUM_REQS_LOW_THRESH 32
 	atomic_t num_reqs_threshold;
 	bool cur_freq_vote;
-	struct delayed_work fwork;
+	struct work_struct fwork;
 	bool cpufreq_dis;
 	unsigned int min_cpu_scale_freq;
 	unsigned int max_cpu_scale_freq;
@@ -532,6 +737,24 @@ struct ufs_qcom_host {
 	struct device_node *np;
 	int chosen_algo;
 	struct ufs_clk_info *ref_clki;
+	struct ufs_clk_info *core_unipro_clki;
+	atomic_t hi_pri_en;
+	atomic_t therm_mitigation;
+	cpumask_t perf_mask;
+	cpumask_t silver_mask;
+	cpumask_t gold_mask;
+	cpumask_t gold_prime_mask;
+	u32 vccq_lpm_uV;
+	bool disable_wb_support;
+	struct ufs_qcom_ber_hist ber_hist[UFS_QCOM_BER_MODE_MAX];
+	struct list_head regs_list_head;
+	bool ber_th_exceeded;
+	u32 valid_evt_cnt[UFS_EVT_CNT];
+	bool irq_affinity_support;
+	bool bypass_pbl_rst_wa;
+	struct notifier_block ufs_qcom_panic_nb;
+	ktime_t throughput_judge_time;
+
 };
 
 static inline u32
@@ -546,6 +769,7 @@ ufs_qcom_get_debug_reg_offset(struct ufs_qcom_host *host, u32 reg)
 #define ufs_qcom_is_link_off(hba) ufshcd_is_link_off(hba)
 #define ufs_qcom_is_link_active(hba) ufshcd_is_link_active(hba)
 #define ufs_qcom_is_link_hibern8(hba) ufshcd_is_link_hibern8(hba)
+#define ufs_qcom_is_ufs_dev_active(hba) ufshcd_is_ufs_dev_active(hba)
 
 int ufs_qcom_testbus_config(struct ufs_qcom_host *host);
 void ufs_qcom_print_hw_debug_reg_all(struct ufs_hba *hba, void *priv,
@@ -606,7 +830,9 @@ out:
  *  SCSI_IOCTL_GET_PCI
  */
 #define UFS_IOCTL_QUERY			0x5388
-
+/*feature-memorymonitor-v001-1-begin*/
+#define UFS_IOCTL_MONITOR               0x5392  /* For monitor access */
+/*feature-memorymonitor-v001-1-end*/
 /**
  * struct ufs_ioctl_query_data - used to transfer data to and from user via
  * ioctl

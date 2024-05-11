@@ -76,7 +76,6 @@ enum dwc3_notify_event {
 	DWC3_CONTROLLER_NOTIFY_DISABLE_UPDXFER,
 	DWC3_CONTROLLER_PULLUP_ENTER,
 	DWC3_CONTROLLER_PULLUP_EXIT,
-	DWC3_CONTROLLER_SOFT_RESET,
 
 	/* USB GSI event buffer related notification */
 	DWC3_GSI_EVT_BUF_ALLOC,
@@ -283,7 +282,6 @@ int msm_data_fifo_config(struct usb_ep *ep, unsigned long addr, u32 size,
 	u8 dst_pipe_idx);
 int msm_dwc3_reset_dbm_ep(struct usb_ep *ep);
 int dwc3_msm_set_dp_mode(struct device *dev, bool connected, int lanes);
-int dwc3_msm_release_ss_lane(struct device *dev);
 int msm_ep_update_ops(struct usb_ep *ep);
 int msm_ep_clear_ops(struct usb_ep *ep);
 int msm_ep_set_mode(struct usb_ep *ep, enum usb_hw_ep_mode mode);
@@ -309,8 +307,6 @@ static inline void dwc3_tx_fifo_resize_request(struct usb_ep *ep,
 static inline bool msm_dwc3_reset_ep_after_lpm(struct usb_gadget *gadget)
 { return false; }
 static inline int dwc3_msm_set_dp_mode(struct device *dev, bool connected, int lanes)
-{ return -ENODEV; }
-static inline int dwc3_msm_release_ss_lane(struct device *dev)
 { return -ENODEV; }
 int msm_ep_update_ops(struct usb_ep *ep)
 { return -ENODEV; }

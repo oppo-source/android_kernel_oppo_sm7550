@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _DT_BINDINGS_CLK_QCOM_GCC_CINDER_H
@@ -126,6 +126,20 @@
 #define GCC_USB3_PRIM_PHY_AUX_CLK_SRC			116
 #define GCC_USB3_PRIM_PHY_COM_AUX_CLK			117
 #define GCC_USB3_PRIM_PHY_PIPE_CLK			118
+#define GCC_SM_BUS_AHB_CLK				119
+#define GCC_SM_BUS_XO_CLK				120
+#define GCC_SM_BUS_XO_CLK_SRC				121
+#define GCC_USB3_PRIM_PHY_PIPE_CLK_SRC			122
+#define GCC_ETH_100G_C2C_HM_APB_CLK			123
+#define GCC_ETH_100G_FH_HM_APB_0_CLK			124
+#define GCC_ETH_100G_FH_HM_APB_1_CLK			125
+#define GCC_ETH_100G_FH_HM_APB_2_CLK			126
+#define GCC_ETH_DBG_C2C_HM_APB_CLK			127
+#define GCC_AGGRE_NOC_ECPRI_GSI_CLK			128
+#define GCC_PCIE_0_PIPE_CLK_SRC				129
+#define GCC_PCIE_0_PHY_AUX_CLK_SRC			130
+#define GCC_GPLL1_OUT_EVEN				131
+#define GCC_DDRSS_ECPRI_GSI_CLK				132
 
 /* GCC resets */
 #define GCC_ECPRI_CC_BCR				0

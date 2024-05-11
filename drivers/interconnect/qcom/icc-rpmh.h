@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __DRIVERS_INTERCONNECT_QCOM_ICC_RPMH_H__
@@ -26,6 +27,8 @@ struct qcom_icc_provider {
 	struct device *dev;
 	struct qcom_icc_bcm **bcms;
 	size_t num_bcms;
+	struct qcom_icc_node **nodes;
+	size_t num_nodes;
 	struct list_head probe_list;
 	struct regmap *regmap;
 	struct clk_bulk_data *clks;
@@ -68,6 +71,7 @@ struct bcm_db {
  * @perf_mode: current OR aggregate value of all QCOM_ICC_TAG_PERF_MODE votes
  * @bcms: list of bcms associated with this logical node
  * @num_bcms: num of @bcms
+ * @disabled : flag used to indicate state of icc node
  */
 struct qcom_icc_node {
 	const char *name;
@@ -84,6 +88,7 @@ struct qcom_icc_node {
 	struct regmap *regmap;
 	struct qcom_icc_qosbox *qosbox;
 	const struct qcom_icc_noc_ops *noc_ops;
+	bool disabled;
 };
 
 /**
@@ -102,6 +107,7 @@ struct qcom_icc_node {
  * @keepalive_early: keepalive only prior to sync-state
  * @qos_proxy: flag used to indicate whether a proxy vote needed as part of
  * qos configuration
+ * @disabled: flag used to indicate state of bcm node
  * @aux_data: auxiliary data used when calculating threshold values and
  * communicating with RPMh
  * @list: used to link to other bcms when compiling lists for commit
@@ -122,6 +128,7 @@ struct qcom_icc_bcm {
 	bool keepalive;
 	bool keepalive_early;
 	bool qos_proxy;
+	bool disabled;
 	struct bcm_db aux_data;
 	struct list_head list;
 	struct list_head ws_list;
@@ -168,4 +175,5 @@ int qcom_icc_get_bw_stub(struct icc_node *node, u32 *avg, u32 *peak);
 int qcom_icc_rpmh_probe(struct platform_device *pdev);
 int qcom_icc_rpmh_remove(struct platform_device *pdev);
 void qcom_icc_rpmh_sync_state(struct device *dev);
+int qcom_icc_rpmh_configure_qos(struct qcom_icc_provider *qp);
 #endif

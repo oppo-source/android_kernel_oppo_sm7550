@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -89,6 +89,9 @@
 #define V_CLK_19P2M_EN			BIT(6)
 #define V_CLK_19P2M_EN_SHIFT		6
 
+#undef dev_dbg
+#define dev_dbg dev_err
+
 struct eusb2_repeater {
 	struct usb_repeater	ur;
 	struct regmap		*regmap;
@@ -111,8 +114,12 @@ struct eusb2_repeater {
 	u8			eusb_equ;
 	u8			eusb_hs_comp_current;
 
-	u8			*param_override_seq;
+	u32			*param_override_seq;
 	u8			param_override_seq_cnt;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u32			*param_override_seq_host;
+	u8			param_override_seq_cnt_host;
+#endif
 };
 
 /* Perform one or more register read */
@@ -165,7 +172,7 @@ static int eusb2_repeater_masked_write(struct eusb2_repeater *er,
 }
 
 static void eusb2_repeater_update_seq(struct eusb2_repeater *er,
-						u8 *seq, u8 cnt)
+						u32 *seq, u8 cnt)
 {
 	int i;
 
@@ -179,6 +186,19 @@ static void eusb2_repeater_update_seq(struct eusb2_repeater *er,
 
 static void eusb2_repeater_create_debugfs(struct eusb2_repeater *er)
 {
+	er->usb2_crossover = U8_MAX;
+	er->iusb2 = U8_MAX;
+	er->res_fsdif = U8_MAX;
+	er->hsdisc = U8_MAX;
+	er->squelch_u = U8_MAX;
+	er->usb2_slew = U8_MAX;
+	er->usb2_equ = U8_MAX;
+	er->usb2_preem = U8_MAX;
+	er->hs_comp_current = U8_MAX;
+	er->eusb_slew = U8_MAX;
+	er->eusb_equ = U8_MAX;
+	er->eusb_hs_comp_current = U8_MAX;
+
 	er->root = debugfs_create_dir(dev_name(er->ur.dev), NULL);
 	debugfs_create_x8("usb2_crossover", 0644, er->root,
 					&er->usb2_crossover);
@@ -306,56 +326,68 @@ static int eusb2_repeater_init(struct usb_repeater *ur)
 			container_of(ur, struct eusb2_repeater, ur);
 	unsigned int rptr_init_cnt = INIT_MAX_CNT;
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if ((ur->flags & PHY_HOST_MODE) && er->param_override_seq_host) {
+		eusb2_repeater_update_seq(er, er->param_override_seq_host,
+			er->param_override_seq_cnt_host);
+		dev_err(er->ur.dev, "Using host eye-diagram parameters!\n");
+	} else if (er->param_override_seq) {
+	/* override init sequence using devicetree based values */
+		eusb2_repeater_update_seq(er, er->param_override_seq,
+			er->param_override_seq_cnt);
+		dev_err(er->ur.dev, "Using device eye-diagram parameters!\n");
+	}
+#else
 	/* override init sequence using devicetree based values */
 	eusb2_repeater_update_seq(er, er->param_override_seq,
 			er->param_override_seq_cnt);
-
+#endif
 	/* override tune params using debugfs based values */
-	if (er->usb2_crossover && er->usb2_crossover <= 0x7)
+	if (er->usb2_crossover <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_CROSSOVER,
 			TUNE_USB2_CROSSOVER_MASK, er->usb2_crossover);
 
-	if (er->iusb2 && er->iusb2 <= 0xf)
+	if (er->iusb2 <= 0xf)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_IUSB2,
 			TUNE_IUSB2_MASK, er->iusb2);
 
-	if (er->res_fsdif && er->res_fsdif <= 0x7)
+	if (er->res_fsdif <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_RES_FSDIF,
 			TUNE_RES_FSIDF_MASK, er->res_fsdif);
 
-	if (er->hsdisc && er->hsdisc <= 0x7)
+	if (er->hsdisc <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_HSDISC,
 			TUNE_HSDISC_MASK, er->hsdisc);
 
-	if (er->squelch_u && er->squelch_u <= 0x7)
+	if (er->squelch_u <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_SQUELCH_U,
 			TUNE_SQELCH_U_MASK, er->squelch_u);
 
-	if (er->usb2_slew && er->usb2_slew <= 0x3)
+	if (er->usb2_slew <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_SLEW,
 			TUNE_USB2_SLEW_MASK, er->usb2_slew);
 
-	if (er->usb2_equ && er->usb2_equ <= 0x3)
+	if (er->usb2_equ <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_EQU,
 			TUNE_USB2_EQU_MASK, er->usb2_equ);
 
-	if (er->usb2_preem && er->usb2_preem <= 0x7)
+	if (er->usb2_preem <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_PREEM,
 			TUNE_USB2_PREEM_MASK, er->usb2_preem);
 
-	if (er->hs_comp_current && er->hs_comp_current <= 0x3)
+	if (er->hs_comp_current <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_HS_COMP_CUR,
 			TUNE_USB2_HS_COMP_CURRENT_MASK, er->hs_comp_current);
 
-	if (er->eusb_slew && er->eusb_slew <= 0x3)
+	if (er->eusb_slew <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_EUSB_SLEW,
 			TUNE_EUSB_SLEW_MASK, er->eusb_slew);
 
-	if (er->eusb_equ && er->eusb_equ <= 0x3)
+	if (er->eusb_equ <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_EUSB_EQU,
 			TUNE_EUSB_EQU_MASK, er->eusb_equ);
 
-	if (er->eusb_hs_comp_current && er->eusb_hs_comp_current <= 0x3)
+	if (er->eusb_hs_comp_current <= 0x3)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_EUSB_HS_COMP_CUR,
 			TUNE_EUSB_HS_COMP_CUR_MASK, er->eusb_hs_comp_current);
 	/*
@@ -482,7 +514,7 @@ static int eusb2_repeater_probe(struct platform_device *pdev)
 			goto err_probe;
 		}
 
-		ret = of_property_read_u8_array(dev->of_node,
+		ret = of_property_read_u32_array(dev->of_node,
 				"qcom,param-override-seq",
 				er->param_override_seq,
 				er->param_override_seq_cnt);
@@ -492,6 +524,38 @@ static int eusb2_repeater_probe(struct platform_device *pdev)
 			goto err_probe;
 		}
 	}
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	num_elem = of_property_count_elems_of_size(dev->of_node,
+				"qcom,param-override-seq-host",
+				sizeof(*er->param_override_seq_host));
+	if (num_elem > 0) {
+		if (num_elem % 2) {
+			dev_err(dev, "invalid param_override_seq_host_len\n");
+			ret = -EINVAL;
+			goto err_probe;
+		}
+
+		er->param_override_seq_cnt_host = num_elem;
+		er->param_override_seq_host = devm_kcalloc(dev,
+				er->param_override_seq_cnt_host,
+				sizeof(*er->param_override_seq_host), GFP_KERNEL);
+		if (!er->param_override_seq_host) {
+			ret = -ENOMEM;
+			goto err_probe;
+		}
+
+		ret = of_property_read_u32_array(dev->of_node,
+				"qcom,param-override-seq-host",
+				er->param_override_seq_host,
+				er->param_override_seq_cnt_host);
+		if (ret) {
+			dev_err(dev, "qcom,param-override-seq-host read failed %d\n",
+									ret);
+			goto err_probe;
+		}
+	}
+#endif
 
 	er->ur.dev = dev;
 	platform_set_drvdata(pdev, er);

@@ -27,7 +27,8 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
-
+#undef CREATE_TRACE_POINTS
+#include <trace/hooks/mm.h>
 #include "internal.h"
 
 #include "slab.h"
@@ -162,8 +163,7 @@ static unsigned int calculate_alignment(slab_flags_t flags,
 		align = max(align, ralign);
 	}
 
-	if (align < ARCH_SLAB_MINALIGN)
-		align = ARCH_SLAB_MINALIGN;
+	align = max(align, arch_slab_minalign());
 
 	return ALIGN(align, sizeof(void *));
 }
@@ -568,6 +568,13 @@ bool kmem_valid_obj(void *object)
 }
 EXPORT_SYMBOL_GPL(kmem_valid_obj);
 
+static void kmem_obj_info(struct kmem_obj_info *kpp, void *object, struct page *page)
+{
+	if (__kfence_obj_info(kpp, object, page))
+		return;
+	__kmem_obj_info(kpp, object, page);
+}
+
 /**
  * kmem_dump_obj - Print available slab provenance information
  * @object: slab object for which to find provenance information.
@@ -603,6 +610,8 @@ void kmem_dump_obj(void *object)
 		pr_cont(" slab%s %s", cp, kp.kp_slab_cache->name);
 	else
 		pr_cont(" slab%s", cp);
+	if (is_kfence_address(object))
+		pr_cont(" (kfence)");
 	if (kp.kp_objp)
 		pr_cont(" start %px", kp.kp_objp);
 	if (kp.kp_data_offset)
@@ -689,6 +698,10 @@ kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_SHIFT_HIGH + 1] __ro_after_init =
 { /* initialization for https://bugs.llvm.org/show_bug.cgi?id=42570 */ };
 EXPORT_SYMBOL(kmalloc_caches);
 
+/* This variable is intentionally unused. Preserved for KMI stability. */
+bool android_kmalloc_64_create __ro_after_init;
+EXPORT_SYMBOL(android_kmalloc_64_create);
+
 /*
  * Conversion table for small slabs sizes / 8 to the index in the
  * kmalloc array. This is necessary for slabs < 192 since we have non power
@@ -734,6 +747,7 @@ static inline unsigned int size_index_elem(unsigned int bytes)
 struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
 {
 	unsigned int index;
+	struct kmem_cache *s = NULL;
 
 	if (size <= 192) {
 		if (!size)
@@ -745,6 +759,10 @@ struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
 			return NULL;
 		index = fls(size - 1);
 	}
+
+	trace_android_vh_kmalloc_slab(index, flags, &s);
+	if (s)
+		return s;
 
 	return kmalloc_caches[kmalloc_type(flags)][index];
 }
@@ -960,6 +978,9 @@ void *kmalloc_order(size_t size, gfp_t flags, unsigned int order)
 		mod_lruvec_page_state(page, NR_SLAB_UNRECLAIMABLE_B,
 				      PAGE_SIZE << order);
 	}
+
+	trace_android_vh_kmalloc_order_alloced(page, size, flags);
+
 	ret = kasan_kmalloc_large(ret, size, flags);
 	/* As ret might get tagged, call kmemleak hook after KASAN. */
 	kmemleak_alloc(ret, size, 1, flags);
@@ -1049,6 +1070,7 @@ static void print_slabinfo_header(struct seq_file *m)
 	seq_puts(m, " : globalstat <listallocs> <maxobjs> <grown> <reaped> <error> <maxfreeable> <nodeallocs> <remotefrees> <alienoverflow>");
 	seq_puts(m, " : cpustat <allochit> <allocmiss> <freehit> <freemiss>");
 #endif
+	trace_android_vh_print_slabinfo_header(m);
 	seq_putc(m, '\n');
 }
 
@@ -1084,6 +1106,7 @@ static void cache_show(struct kmem_cache *s, struct seq_file *m)
 	seq_printf(m, " : slabdata %6lu %6lu %6lu",
 		   sinfo.active_slabs, sinfo.num_slabs, sinfo.shared_avail);
 	slabinfo_show_stats(m, s);
+	trace_android_vh_cache_show(m, &sinfo, s);
 	seq_putc(m, '\n');
 }
 

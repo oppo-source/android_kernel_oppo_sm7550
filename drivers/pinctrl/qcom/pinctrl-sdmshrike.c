@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -48,6 +49,9 @@
 		.intr_status_reg = base + 0xc + REG_SIZE * id,	\
 		.intr_target_reg = base + 0x8 + REG_SIZE * id,	\
 		.mux_bit = 2,			\
+		.dir_conn_reg = (base == EAST) ? base + 0xcc000 : \
+			((base == WEST) ? base + 0xcc000 : \
+			((base == NORTH) ? EAST + 0xcc000 : base + 0xcd000)), \
 		.pull_bit = 0,			\
 		.drv_bit = 6,			\
 		.egpio_enable = 12,		\
@@ -63,6 +67,7 @@
 		.intr_polarity_bit = 1,		\
 		.intr_detection_bit = 2,	\
 		.intr_detection_width = 2,	\
+		.dir_conn_en_bit = 8,       \
 	}
 
 #define SDC_QDSD_PINGROUP(pg_name, ctl, pull, drv)	\
@@ -305,11 +310,11 @@ static const struct pinctrl_pin_desc sdmshrike_pins[] = {
 	PINCTRL_PIN(187, "GPIO_187"),
 	PINCTRL_PIN(188, "GPIO_188"),
 	PINCTRL_PIN(189, "GPIO_189"),
-	PINCTRL_PIN(190, "SDC2_CLK"),
-	PINCTRL_PIN(191, "SDC2_CMD"),
-	PINCTRL_PIN(192, "SDC2_DATA"),
-	PINCTRL_PIN(193, "UFS_RESET"),
-	PINCTRL_PIN(194, "UFS0_RESET"),
+	PINCTRL_PIN(190, "UFS_RESET"),
+	PINCTRL_PIN(191, "UFS0_RESET"),
+	PINCTRL_PIN(192, "SDC2_CLK"),
+	PINCTRL_PIN(193, "SDC2_CMD"),
+	PINCTRL_PIN(194, "SDC2_DATA"),
 };
 
 #define DECLARE_MSM_GPIO_PINS(pin) \
@@ -505,11 +510,11 @@ DECLARE_MSM_GPIO_PINS(187);
 DECLARE_MSM_GPIO_PINS(188);
 DECLARE_MSM_GPIO_PINS(189);
 
-static const unsigned int sdc2_clk_pins[] = { 190 };
-static const unsigned int sdc2_cmd_pins[] = { 191 };
-static const unsigned int sdc2_data_pins[] = { 192 };
-static const unsigned int ufs_reset_pins[] = { 193 };
-static const unsigned int ufs0_reset_pins[] = { 194 };
+static const unsigned int sdc2_clk_pins[] = { 192 };
+static const unsigned int sdc2_cmd_pins[] = { 193 };
+static const unsigned int sdc2_data_pins[] = { 194 };
+static const unsigned int ufs_reset_pins[] = { 190 };
+static const unsigned int ufs0_reset_pins[] = { 191 };
 
 enum sdmshrike_functions {
 	msm_mux_GRFC2,
@@ -2230,11 +2235,11 @@ static const struct msm_pingroup sdmshrike_groups[] = {
 	[187] = PINGROUP(187, SOUTH1, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	[188] = PINGROUP(188, SOUTH1, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	[189] = PINGROUP(189, SOUTH1, dp_hot, NA, NA, NA, NA, NA, NA, NA, NA),
-	[190] = SDC_QDSD_PINGROUP(sdc2_clk, 0x9b2000, 14, 6),
-	[191] = SDC_QDSD_PINGROUP(sdc2_cmd, 0x9b2000, 11, 3),
-	[192] = SDC_QDSD_PINGROUP(sdc2_data, 0x9b2000, 9, 0),
-	[193] = UFS_RESET(ufs_reset, 0xdb6004),
-	[194] = UFS_RESET(ufs0_reset, 0xdc7004),
+	[190] = UFS_RESET(ufs_reset, 0xdb6000),
+	[191] = UFS_RESET(ufs0_reset, 0xdc7000),
+	[192] = SDC_QDSD_PINGROUP(sdc2_clk, 0x9b2000, 14, 6),
+	[193] = SDC_QDSD_PINGROUP(sdc2_cmd, 0x9b2000, 11, 3),
+	[194] = SDC_QDSD_PINGROUP(sdc2_data, 0x9b2000, 9, 0),
 };
 
 static const struct msm_gpio_wakeirq_map sdmshrike_pdc_map[] = {
@@ -2256,6 +2261,11 @@ static const struct msm_gpio_wakeirq_map sdmshrike_pdc_map[] = {
 	{ 189, 114 },
 };
 
+static struct msm_dir_conn sdmshrike_dir_conn[] = {
+	{-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0},
+	{-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}
+};
+
 static struct msm_pinctrl_soc_data sdmshrike_pinctrl = {
 	.pins = sdmshrike_pins,
 	.npins = ARRAY_SIZE(sdmshrike_pins),
@@ -2263,14 +2273,57 @@ static struct msm_pinctrl_soc_data sdmshrike_pinctrl = {
 	.nfunctions = ARRAY_SIZE(sdmshrike_functions),
 	.groups = sdmshrike_groups,
 	.ngroups = ARRAY_SIZE(sdmshrike_groups),
-	.ngpios = 190,
+	.ngpios = 192,
 	.wakeirq_map = sdmshrike_pdc_map,
 	.nwakeirq_map = ARRAY_SIZE(sdmshrike_pdc_map),
 	.wakeirq_dual_edge_errata = true,
+	.dir_conn = sdmshrike_dir_conn,
 };
+
+static int sdmshrike_pinctrl_dirconn_list_probe(struct platform_device *pdev)
+{
+	int ret, n, dirconn_list_count, m;
+	struct device_node *np = pdev->dev.of_node;
+
+	n = of_property_count_elems_of_size(np, "qcom,dirconn-list",
+					sizeof(u32));
+	if (n <= 0 || n % 2)
+		return -EINVAL;
+
+	m = ARRAY_SIZE(sdmshrike_dir_conn) - 1;
+
+	dirconn_list_count = n / 2;
+
+	for (n = 0; n < dirconn_list_count; n++) {
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 0,
+						&sdmshrike_dir_conn[m].gpio);
+		if (ret)
+			return ret;
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 1,
+						&sdmshrike_dir_conn[m].irq);
+		if (ret)
+			return ret;
+		m--;
+	}
+
+	return 0;
+}
 
 static int sdmshrike_pinctrl_probe(struct platform_device *pdev)
 {
+	int len, ret;
+
+	if (of_find_property(pdev->dev.of_node, "qcom,dirconn-list", &len)) {
+		ret = sdmshrike_pinctrl_dirconn_list_probe(pdev);
+		if (ret) {
+			dev_err(&pdev->dev,
+					"Unable to parse Direct Connect List\n");
+			return ret;
+		}
+	}
+
 	return msm_pinctrl_probe(pdev, &sdmshrike_pinctrl);
 }
 

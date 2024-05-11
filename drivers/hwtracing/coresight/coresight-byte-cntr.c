@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/interrupt.h>
@@ -41,6 +41,7 @@ static irqreturn_t etr_handler(int irq, void *data)
 {
 	struct byte_cntr *byte_cntr_data = data;
 	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
+	struct tmc_pcie_data *pcie_data = byte_cntr_data->pcie_data;
 
 	if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_USB) {
 		atomic_inc(&byte_cntr_data->irq_cnt);
@@ -48,6 +49,10 @@ static irqreturn_t etr_handler(int irq, void *data)
 	} else if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_MEM) {
 		atomic_inc(&byte_cntr_data->irq_cnt);
 		wake_up(&byte_cntr_data->wq);
+	} else if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_PCIE) {
+		atomic_inc(&pcie_data->irq_cnt);
+		wake_up(&pcie_data->pcie_wait_wq);
+		pcie_data->total_irq++;
 	}
 
 	byte_cntr_data->total_irq++;
@@ -57,7 +62,7 @@ static irqreturn_t etr_handler(int irq, void *data)
 
 
 static long tmc_etr_flush_remaining_bytes(struct tmc_drvdata *tmcdrvdata, long offset,
-			char **bufpp)
+			size_t len, char **bufpp)
 {
 	long rwp_offset, req_size, actual = 0;
 	struct etr_buf *etr_buf;
@@ -81,6 +86,9 @@ static long tmc_etr_flush_remaining_bytes(struct tmc_drvdata *tmcdrvdata, long o
 	req_size = ((rwp_offset < offset) ? tmcdrvdata->size : 0) +
 		rwp_offset - offset;
 
+	if (req_size > len)
+		req_size = len;
+
 	if (req_size > 0)
 		actual = tmc_etr_buf_get_data(etr_buf, offset, req_size, bufpp);
 
@@ -103,7 +111,7 @@ static ssize_t tmc_etr_byte_cntr_read(struct file *fp, char __user *data,
 	mutex_lock(&byte_cntr_data->byte_cntr_lock);
 	if (!byte_cntr_data->read_active) {
 		actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
-				byte_cntr_data->offset, &bufp);
+				byte_cntr_data->offset, len, &bufp);
 		if (actual > 0) {
 			len = actual;
 			goto copy;
@@ -123,7 +131,7 @@ static ssize_t tmc_etr_byte_cntr_read(struct file *fp, char __user *data,
 			mutex_lock(&byte_cntr_data->byte_cntr_lock);
 			if (!byte_cntr_data->read_active) {
 				actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
-						byte_cntr_data->offset, &bufp);
+						byte_cntr_data->offset, len, &bufp);
 				if (actual > 0) {
 					len = actual;
 					goto copy;
@@ -139,7 +147,7 @@ static ssize_t tmc_etr_byte_cntr_read(struct file *fp, char __user *data,
 
 	} else {
 		actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
-				byte_cntr_data->offset, &bufp);
+				byte_cntr_data->offset, len, &bufp);
 		if (actual > 0) {
 			len = actual;
 			goto copy;

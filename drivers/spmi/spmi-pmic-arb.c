@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved. */
+/* Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <linux/bitmap.h>
 #include <linux/debugfs.h>
@@ -174,6 +175,7 @@ struct spmi_pmic_arb {
 	int			irq;
 	u8			ee;
 	u32			bus_instance;
+	u8			mid;
 	u16			min_apid;
 	u16			max_apid;
 	u16			base_apid;
@@ -298,20 +300,20 @@ static int pmic_arb_wait_for_done(struct spmi_controller *ctrl,
 
 		if (status & PMIC_ARB_STATUS_DONE) {
 			if (status & PMIC_ARB_STATUS_DENIED) {
-				dev_err(&ctrl->dev, "%s: transaction denied (0x%x)\n",
-					__func__, status);
+				dev_err(&ctrl->dev, "%s: %#x %#x: transaction denied (%#x)\n",
+					__func__, sid, addr, status);
 				return -EPERM;
 			}
 
 			if (status & PMIC_ARB_STATUS_FAILURE) {
-				dev_err(&ctrl->dev, "%s: transaction failed (0x%x)\n",
-					__func__, status);
+				dev_err(&ctrl->dev, "%s: %#x %#x: transaction failed (%#x)\n",
+					__func__, sid, addr, status);
 				return -EIO;
 			}
 
 			if (status & PMIC_ARB_STATUS_DROPPED) {
-				dev_err(&ctrl->dev, "%s: transaction dropped (0x%x)\n",
-					__func__, status);
+				dev_err(&ctrl->dev, "%s: %#x %#x: transaction dropped (%#x)\n",
+					__func__, sid, addr, status);
 				return -EIO;
 			}
 
@@ -320,8 +322,8 @@ static int pmic_arb_wait_for_done(struct spmi_controller *ctrl,
 		udelay(1);
 	}
 
-	dev_err(&ctrl->dev, "%s: timeout, status 0x%x\n",
-		__func__, status);
+	dev_err(&ctrl->dev, "%s: %#x %#x: timeout, status %#x\n",
+		__func__, sid, addr, status);
 	return -ETIMEDOUT;
 }
 
@@ -485,6 +487,7 @@ enum qpnpint_regs {
 	QPNPINT_REG_EN_SET		= 0x15,
 	QPNPINT_REG_EN_CLR		= 0x16,
 	QPNPINT_REG_LATCHED_STS		= 0x18,
+	QPNPINT_REG_MID_SEL		= 0x1A,
 };
 
 struct spmi_pmic_arb_qpnpint_type {
@@ -755,6 +758,13 @@ static int qpnpint_irq_domain_activate(struct irq_domain *domain,
 			pmic_arb->apid_data[apid].irq_ee);
 		return -ENODEV;
 	}
+
+	/*
+	 * Make sure the interrupt is assigned to primary SOC by writing the
+	 * MID value to MID_SEL register.
+	 */
+	if (pmic_arb->mid != EINVAL)
+		qpnpint_spmi_write(d, QPNPINT_REG_MID_SEL, &pmic_arb->mid, 1);
 
 	buf = BIT(irq);
 	qpnpint_spmi_write(d, QPNPINT_REG_EN_CLR, &buf, 1);
@@ -1597,7 +1607,7 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	struct resource *res;
 	void __iomem *core;
 	u32 *mapping_table;
-	u32 channel, ee, hw_ver;
+	u32 channel, ee, hw_ver, mid = 0;
 	int err;
 
 	ctrl = spmi_controller_alloc(&pdev->dev, sizeof(*pmic_arb));
@@ -1618,6 +1628,11 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	 * which does not result in a devm_request_mem_region() call.
 	 */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "core");
+	if (!res) {
+		err = -EINVAL;
+		goto err_put_ctrl;
+	}
+
 	core = devm_ioremap(&ctrl->dev, res->start, resource_size(res));
 	if (IS_ERR(core)) {
 		err = PTR_ERR(core);
@@ -1655,6 +1670,11 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						   "obsrvr");
+		if (!res) {
+			err = -EINVAL;
+			goto err_put_ctrl;
+		}
+
 		pmic_arb->rd_base = devm_ioremap(&ctrl->dev, res->start,
 						 resource_size(res));
 		if (IS_ERR(pmic_arb->rd_base)) {
@@ -1664,6 +1684,11 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						   "chnls");
+		if (!res) {
+			err = -EINVAL;
+			goto err_put_ctrl;
+		}
+
 		pmic_arb->wr_base = devm_ioremap(&ctrl->dev, res->start,
 						 resource_size(res));
 		if (IS_ERR(pmic_arb->wr_base)) {
@@ -1733,6 +1758,11 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 		 pmic_arb->ver_ops->ver_str, hw_ver);
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "intr");
+	if (!res) {
+		err = -EINVAL;
+		goto err_put_ctrl;
+	}
+
 	pmic_arb->intr = devm_ioremap_resource(&ctrl->dev, res);
 	if (IS_ERR(pmic_arb->intr)) {
 		err = PTR_ERR(pmic_arb->intr);
@@ -1740,6 +1770,11 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cnfg");
+	if (!res) {
+		err = -EINVAL;
+		goto err_put_ctrl;
+	}
+
 	pmic_arb->cnfg = devm_ioremap_resource(&ctrl->dev, res);
 	if (IS_ERR(pmic_arb->cnfg)) {
 		err = PTR_ERR(pmic_arb->cnfg);
@@ -1782,6 +1817,17 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	}
 
 	pmic_arb->ee = ee;
+
+	pmic_arb->mid = EINVAL;
+	err = of_property_read_u32(pdev->dev.of_node, "qcom,mid", &mid);
+	if (!err && mid <= 3) {
+		pmic_arb->mid = mid;
+	} else if (err != -EINVAL) {
+		dev_err(&pdev->dev, "invalid MID (%u) specified\n", mid);
+		err = -EINVAL;
+		goto err_put_ctrl;
+	}
+
 	mapping_table = devm_kcalloc(&ctrl->dev, PMIC_ARB_MAX_PERIPHS,
 					sizeof(*mapping_table), GFP_KERNEL);
 	if (!mapping_table) {
